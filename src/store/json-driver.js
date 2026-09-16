@@ -61,8 +61,22 @@ export function createJsonDriver({ directory }) {
       return item;
     },
 
+    /**
+     * Write many rows at once, overwriting rather than merging.
+     *
+     * This used to call put() in a loop, which merges. The DynamoDB driver
+     * cannot merge in a batch write, so the two drivers quietly disagreed
+     * about what putMany means. Nothing depended on it - saveNewArticles is
+     * the only caller and it passes only new rows - but two drivers behind
+     * one interface behaving differently is a bug waiting for a reader.
+     */
     async putMany(collection, newItems) {
-      for (const item of newItems) await this.put(collection, item);
+      const items = await load(collection);
+      const byId = new Map(items.map((item) => [item.id, item]));
+
+      for (const item of newItems) byId.set(item.id, item);
+
+      await save(collection, [...byId.values()]);
       return newItems;
     },
 

@@ -5,6 +5,8 @@
  * on everything the classifier kept; the model then ranks only the top few.
  */
 
+import { guessFrame, UNKNOWN_FRAME } from './frames.js';
+
 /**
  * Whole-word match.
  *
@@ -33,6 +35,23 @@ export function extractTopics(article, bigNames) {
   return [...new Set([...names, ...properNouns])].slice(0, 6);
 }
 
+/**
+ * How heavily a frame has been leaned on lately (0-1).
+ *
+ * Unlike topics, one repeat already matters. Two "something failed" posts in
+ * a row is exactly the pattern we are trying to break, even when the two
+ * stories share no companies at all.
+ */
+export function frameFatigue(frame, recentFrames) {
+  // An unclear frame is not evidence of repetition, it is an absence of
+  // evidence. Penalising it would push stories off the list for the crime of
+  // not matching a keyword.
+  if (!frame || frame === UNKNOWN_FRAME || !recentFrames.length) return 0;
+
+  const used = recentFrames.filter((recent) => recent === frame).length;
+  return Math.min(1, used / Math.min(recentFrames.length, 3));
+}
+
 /** How much this story overlaps with what we posted recently (0-1). */
 export function topicOverlap(topics, recentTopics) {
   if (!topics.length || !recentTopics.length) return 0;
@@ -46,11 +65,15 @@ export function topicOverlap(topics, recentTopics) {
 /**
  * Score one article for post-worthiness.
  *
- * @param {object} article       classified article
- * @param {object} settings      config.curator
- * @param {string[]} recentTopics topics from the last N published posts
+ * @param {object} article        classified article
+ * @param {object} settings       config.curator
+ * @param {object} [recent]
+ * @param {string[]} [recent.topics]  topics from the last N published posts
+ * @param {string[]} [recent.frames]  frames from the last N published posts
  */
-export function scoreMemeability(article, settings, recentTopics = []) {
+export function scoreMemeability(article, settings, recent = {}) {
+  const recentTopics = recent.topics ?? [];
+  const recentFrames = recent.frames ?? [];
   const title = article.title ?? '';
   const text = `${title} ${article.summary ?? ''}`.toLowerCase();
   const signals = settings.memeSignals;
@@ -92,6 +115,15 @@ export function scoreMemeability(article, settings, recentTopics = []) {
     reasons.push('people will argue');
   }
 
+  // Counterweight. Everything above this line rewards something going wrong -
+  // funnyWords is almost entirely outage, broke, crash, deleted, hacked - so
+  // without a signal for things that went right, the feed ends up being one
+  // long obituary. A good story is funny too, just in a different way.
+  if (settings.positiveWords.some((word) => mentions(text, word))) {
+    score += signals.positive;
+    reasons.push('something actually went right');
+  }
+
   // Heavy news: extinction, layoffs, death, lawsuits. Important, but there is
   // no joke in it, and forcing one reads badly. Push these down hard.
   const heavyHits = settings.heavyWords.filter((word) => mentions(text, word));
@@ -113,9 +145,22 @@ export function scoreMemeability(article, settings, recentTopics = []) {
     reasons.push(`overlaps recent posts (${Math.round(overlap * 100)}%)`);
   }
 
+  // Same idea one level up: not the same companies, the same kind of story.
+  const { frame, confident } = guessFrame(article);
+  const fatigue = frameFatigue(frame, recentFrames);
+
+  if (fatigue > 0) {
+    // A guess we are unsure of should not push a story off the list on its
+    // own, so an uncertain frame counts for less.
+    score -= fatigue * settings.framePenalty * (confident ? 1 : 0.5);
+    reasons.push(`recent posts already did "${frame}"`);
+  }
+
   return {
     memeScore: Number(Math.min(1, Math.max(0, score)).toFixed(3)),
     topics,
+    guessedFrame: frame,
+    frameConfident: confident,
     reasons,
   };
 }

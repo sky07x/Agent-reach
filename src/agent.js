@@ -21,6 +21,42 @@ import { createPublisher } from './publisher/index.js';
 const log = createLogger('agent');
 
 /**
+ * Refuse to publish for real while writing the record to a local JSON file.
+ *
+ * This is the configuration that caused the whole problem. A post published
+ * from a laptop was recorded in ./data, the scheduled Lambda recorded its own
+ * in DynamoDB, and neither could see the other. Both rotation counters stayed
+ * near zero, so both posts used the first opening style and a randomly picked
+ * template out of a full pool. They came out looking like the same post.
+ *
+ * Worse than the repetition: the article dedupe is split too, so the same
+ * story can go out twice, once from each side.
+ *
+ * Dry runs and the console provider are unaffected. They write drafts, and a
+ * draft written locally costs nothing.
+ */
+export function assertStoreCanRecordLivePosts({ config, store, publisher }) {
+  const willPublish = !config.dryRun && publisher.name === 'linkedin';
+
+  if (!willPublish || store.driver !== 'json') return;
+
+  if (config.store.allowJsonForLivePosts) {
+    log.warn('Publishing live while recording to the local JSON store. Lambda cannot see these posts.');
+    return;
+  }
+
+  throw new Error(
+    'Refusing to publish live while STORE_DRIVER=json.\n\n'
+    + 'A post published from here would be recorded in ./data, where the\n'
+    + 'scheduled Lambda cannot see it. Both sides then reuse the same opening\n'
+    + 'styles and meme templates, and the same story can be posted twice.\n\n'
+    + 'Use the shared store:   STORE_DRIVER=dynamo\n'
+    + 'Bring local history in: npm run store:migrate -- --confirm\n'
+    + 'Or accept the split:    ALLOW_JSON_STORE_FOR_LIVE_POSTS=true',
+  );
+}
+
+/**
  * @param {object} [overrides] swap in fakes for tests, e.g. { llm, store }
  */
 export async function createAgent(overrides = {}) {
@@ -31,6 +67,8 @@ export async function createAgent(overrides = {}) {
   await store.init();
 
   const publisher = overrides.publisher ?? createPublisher({ config });
+
+  assertStoreCanRecordLivePosts({ config, store, publisher });
 
   const agent = {
     config,

@@ -122,7 +122,26 @@ export const config = {
       bigName: 0.15,      // a company everyone knows
       hasQuote: 0.1,
       controversy: 0.1,   // was 0.25, and it kept picking doom stories
+      positive: 0.25,     // counterweight: funnyWords is nearly all bad news
     },
+
+    // How hard a repeated story frame is punished. Frames are tracked in
+    // curator/frames.js; this is the emotional shape of a story, not the
+    // companies in it, and it repeats far more visibly than a company does.
+    framePenalty: 0.45,
+    // Hard cap on how many of one frame can fill the shortlist. The soft
+    // penalty above cannot help inside a single run: if the top eight stories
+    // are all failures, the model has nothing else to pick.
+    maxPerFrame: 3,
+
+    // Things going right. Without these, every signal above rewards something
+    // breaking, and the page turns into one long obituary.
+    positiveWords: [
+      'open-sources', 'open sources', 'open-sourced', 'free', 'faster',
+      'speedup', 'speed up', 'cheaper', 'rewrote', 'rewritten', 'solved',
+      'fixed', 'finally', 'ships', 'shipped', 'breakthrough', 'record',
+      'beats', 'outperforms', 'smaller', 'runs locally', 'on-device',
+    ],
 
     // Stories a developer can actually joke about. This is the main signal.
     funnyWords: [
@@ -164,17 +183,50 @@ export const config = {
 
   /* --- Stage 4/5: how the post should read -------------------------------- */
   content: {
+    // A hard ceiling across every shape. The per-post target comes from the
+    // shape's own range and the length mood below, and is always well under
+    // this - nothing here should ever reach 200 words.
     maxWords: 200,
+    // How long a post runs, rotated per post. Every post landing at the same
+    // length is quieter than a repeated closing question, but a feed where
+    // every entry fills the same amount of screen still reads as machine-paced.
+    lengthMoods: ['tight', 'mid', 'short', 'full'],
     // LinkedIn truncates around here. The hook has to land before it.
     hookMaxChars: 140,
     hookCandidates: 4,
+    // How far below the top score still counts as a contender. The scorer
+    // measures length, cliches and punctuation, not whether a line is good,
+    // so a 0.70 and a 0.68 are the same hook as far as it knows. Taking the
+    // exact maximum every time turned that noise into a rule, and the model
+    // lists its safest line first, so the safest line kept winning ties.
+    // Set to 0 to consider only the exact top score. Note that an exact tie
+    // is still broken at random even then, because a tie is precisely the
+    // case where this scorer has no opinion.
+    hookJitter: 0.12,
     hashtagCount: { min: 3, max: 5 },
-    // Niche beats broad. #LLM lands, #Innovation does not.
-    preferredHashtags: [
-      '#LLM', '#DevTools', '#MachineLearning', '#OpenSource', '#AIAgents',
-      '#SoftwareEngineering', '#GenAI', '#Infra', '#Python', '#TypeScript',
-      '#Cybersecurity', '#Kubernetes', '#RAG', '#GPU', '#PromptEngineering',
-    ],
+    // How many tags a post gets, rotated like everything else. Twelve of the
+    // first thirteen posts carried exactly three, which is a small tell but a
+    // tell. Ordered so the count moves about rather than climbing.
+    hashtagCounts: [3, 5, 4, 3, 4, 5],
+    // A tag used within this many posts is barred. Stops the same two or three
+    // tags riding along on every single post.
+    hashtagCooldown: 3,
+    // How far back fatigue is measured. Same two-horizon idea as the meme
+    // templates: the cooldown bars, the history decides who is most overdue.
+    hashtagHistory: 25,
+    // How many recent posts an exact hashtag SET is compared against. Checking
+    // only the previous post left identical sets seven posts apart, which at
+    // three posts a week is close enough together to read as a copy-paste.
+    hashtagSetCooldown: 10,
+    // No tag may appear in more than this share of the recent window. This is
+    // the one that matters: without it #MachineLearning was on 85% of posts
+    // and #AIAgents on 69%, because the model reaches for them every time.
+    hashtagMaxShare: 0.4,
+    // The flat preferredHashtags list used to live here. It is gone rather
+    // than left lying around: the tags are grouped by subject in
+    // content-engine/hashtags.js now, and which ones a post can reach for
+    // depends on its story frame. A flat list is what let the same three tags
+    // ride along on everything.
     bannedHashtags: ['#AI', '#Technology', '#Innovation', '#Future', '#Growth', '#Motivation'],
     // The skeleton of the post, rotated one per post. Varying only the first
     // line while every post kept the same hook/body/question/hashtags frame is
@@ -187,8 +239,18 @@ export const config = {
       'quote-reaction',
       'receipts',
     ],
-    // Rotate openers too. Five styles against six shapes means the same
-    // pairing does not come round again for thirty posts.
+    // How a post ends, rotated separately again. 'none' is in here on purpose:
+    // every post closing with a question was the loudest sign of a template.
+    // Shapes that end themselves (the zinger, the rant) skip this rotation.
+    closerStyles: [
+      'argument-bait',
+      'flat-verdict',
+      'prediction',
+      'dare',
+      'aside',
+      'none',
+    ],
+    // Rotate openers too.
     openingStyles: [
       'blunt-claim',
       'oh-no-observation',
@@ -208,6 +270,32 @@ export const config = {
   },
 
   memeGenerator: {
+    // What kind of media a post gets, rotated one per post. "text-only" is in
+    // here on purpose: a feed where every single entry carries a matching
+    // square is its own kind of obviously-automated. Sizes live in
+    // meme-generator/media.js.
+    //
+    // Ordered so the two picture treatments are not adjacent, and text-only
+    // lands roughly every third post.
+    treatments: ['meme-square', 'text-only', 'meme-portrait'],
+
+    // How the template is chosen. Selection is deterministic: every candidate
+    // is scored and the best wins, so it cannot draw the same one twice by
+    // chance the way the old random pick did.
+    selectionWeights: {
+      // Does this layout suit the post? A terminal-log post wants a terminal.
+      // Worth more than freshness, because media that matches the writing is
+      // the whole point of choosing rather than drawing from a hat.
+      affinity: 1,
+      // How long since this exact template.
+      templateFreshness: 0.8,
+      // How long since this LAYOUT, whatever the colours. Four of the twelve
+      // templates are the classic shape, so without this two of them in a row
+      // counted as variety while looking like one post recoloured.
+      layoutFreshness: 0.6,
+    },
+
+    // Kept for anything that renders without a treatment.
     width: 1200,
     height: 1200,
     // Small credit line at the bottom of every meme.
@@ -217,8 +305,15 @@ export const config = {
     // article either, so with this empty nothing says where the news came
     // from. Set it back to 'via TechCrunch' if you want the credit.
     footer: process.env.MEME_FOOTER ?? '',
-    // Don't reuse a template until this many posts have gone out.
+    // Don't reuse a template until this many posts have gone out. A hard bar.
     templateCooldown: 8,
+    // How far back the picker LOOKS, which is a different job from the bar
+    // above. The cooldown says who is barred; this says who is most overdue.
+    // With only the cooldown to go on, everything outside it looks equally
+    // stale, the ranking settles into a fixed orbit, and some templates never
+    // come up at all. At eight it cycled ten of the twelve and never drew the
+    // other two.
+    templateHistory: 40,
     format: 'png',
   },
 
@@ -250,6 +345,10 @@ export const config = {
 
   store: {
     driver: process.env.STORE_DRIVER || 'json',
+    // Escape hatch for the guard in agent.js, which refuses to publish live
+    // while recording the post to a local JSON file that Lambda cannot read.
+    // Keeping two memories is what made two posts a day apart look identical.
+    allowJsonForLivePosts: readBool(process.env.ALLOW_JSON_STORE_FOR_LIVE_POSTS, false),
     tableName: process.env.DYNAMO_TABLE || 'linkedin-tech-meme-agent',
     region: process.env.AWS_REGION || 'ap-south-1',
   },

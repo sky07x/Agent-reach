@@ -13,10 +13,11 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { createAgent } from './agent.js';
+import { createAgent, assertStoreCanRecordLivePosts } from './agent.js';
 import { createLinkedInProvider } from './publisher/linkedin-provider.js';
 import { createPipeline } from './pipeline.js';
 import { describeCron } from './scheduler/index.js';
+import { isTextOnly } from './meme-generator/media.js';
 
 const [, , command = 'run', ...flags] = process.argv;
 const holdBack = flags.includes('--dry-run');
@@ -40,20 +41,33 @@ function showPost(post) {
   line();
   console.log(`Why this story: ${post.curationReason || '(heuristic pick)'}`);
   console.log(`Angle:          ${post.angle || '(none given)'}`);
+  console.log(`Frame:          ${post.frame ?? '(none)'}`);
   console.log(`Post shape:     ${post.shape}`);
   console.log(`Opening style:  ${post.openingStyle}`);
-  console.log(`Meme template:  ${post.memeTemplate}`);
-  console.log(`Meme image:     ${post.memePath}`);
+  console.log(`Ends with:      ${post.closerStyle ?? '(the shape ends itself)'}`);
+  console.log(`Length:         ${post.words} words, ${post.lengthMood} (aimed for ${post.targetWords})`);
+  console.log(`Media:          ${post.mediaTreatment ?? 'meme-square'}`);
+  console.log(post.memePath
+    ? `Meme template:  ${post.memeTemplate} (${post.memeLayout} layout)\nMeme image:     ${post.memePath}`
+    : 'Meme template:  none, this post is text-only');
   line();
   console.log(post.text);
   line();
 
   const scoreboard = post.hookScoreboard ?? [];
   if (scoreboard.length) {
-    console.log('Hook candidates, best first:');
+    console.log('Hook candidates, best first ( > is the one that ran):');
     for (const entry of scoreboard) {
       const notes = entry.notes.length ? `  (${entry.notes.join('; ')})` : '';
-      console.log(`  ${entry.score.toFixed(2)}  ${entry.hook}${notes}`);
+      console.log(`${entry.chosen ? ' >' : '  '} ${entry.score.toFixed(2)}  ${entry.hook}${notes}`);
+    }
+  }
+
+  const tagReasons = post.hashtagReasons ?? [];
+  if (tagReasons.length) {
+    console.log('\nHashtags, and why each one is here:');
+    for (const entry of tagReasons) {
+      console.log(`  ${entry.tag.padEnd(22)} ${entry.why} (used ${entry.uses}x recently)`);
     }
   }
 
@@ -92,19 +106,25 @@ async function previewTemplatesCommand() {
   const agent = await createAgent();
   const names = await agent.memeGenerator.listTemplates();
 
-  console.log(`Rendering ${names.length} templates into ${agent.config.paths.output}\n`);
+  // Every picture treatment, so you can see the shapes as well as the colours.
+  const treatments = agent.config.memeGenerator.treatments.filter((name) => !isTextOnly(name));
+
+  console.log(`Rendering ${names.length} templates x ${treatments.length} sizes into ${agent.config.paths.output}\n`);
 
   for (const name of names) {
-    const file = path.join(agent.config.paths.output, `template-${name}.png`);
+    for (const treatment of treatments) {
+      const file = path.join(agent.config.paths.output, `template-${name}-${treatment}.png`);
 
-    await agent.memeGenerator.renderToFile({
-      topText: 'We replaced the intern with an agent',
-      bottomText: 'The agent opened 400 pull requests',
-      footer: agent.config.memeGenerator.footer,
-      templateName: name,
-    }, file);
+      const rendered = await agent.memeGenerator.renderToFile({
+        topText: 'We replaced the intern with an agent',
+        bottomText: 'The agent opened 400 pull requests',
+        footer: agent.config.memeGenerator.footer,
+        templateName: name,
+        treatment,
+      }, file);
 
-    console.log(`  ${name.padEnd(20)} ${file}`);
+      console.log(`  ${name.padEnd(20)} ${rendered.layout.padEnd(11)} ${treatment.padEnd(14)} ${file}`);
+    }
   }
 
   console.log('');
@@ -171,6 +191,16 @@ To actually put this on your LinkedIn profile:
     return;
   }
 
+  // This command builds its own provider and ignores DRY_RUN, so the check in
+  // createAgent() never sees it. That makes this the one path that could
+  // still publish for real and record it somewhere Lambda cannot read - and
+  // it is the path that actually did it, for the first post.
+  assertStoreCanRecordLivePosts({
+    config: { ...agent.config, dryRun: false },
+    store: agent.store,
+    publisher: { name: 'linkedin' },
+  });
+
   // Send it for real.
   const provider = createLinkedInProvider({ settings });
 
@@ -178,10 +208,16 @@ To actually put this on your LinkedIn profile:
   console.log(`Posting as ${who.name} (${who.memberId})...`);
 
   let imageBuffer;
-  try {
-    imageBuffer = await fs.readFile(post.memePath);
-  } catch {
-    console.log('Meme image is missing, posting text only.');
+
+  if (!post.memePath) {
+    // Not a problem: text-only is one of the media treatments.
+    console.log('This post is text-only by design. Posting without an image.');
+  } else {
+    try {
+      imageBuffer = await fs.readFile(post.memePath);
+    } catch {
+      console.log('Meme image is missing, posting text only.');
+    }
   }
 
   const result = await provider.publish({
@@ -211,10 +247,54 @@ no stray backslashes in the text.
 `);
 }
 
+/**
+ * Merge the local JSON store into DynamoDB.
+ *
+ * Needed once, because the agent spent its first week keeping two separate
+ * memories: local runs wrote ./data, Lambda wrote DynamoDB, and neither knew
+ * about the other's posts or rotation counters.
+ *
+ * Prints what it would do and stops. Pass --confirm to write.
+ */
+async function migrateStoreCommand() {
+  const confirmed = flags.includes('--confirm');
+
+  const { config } = await import('./config/index.js');
+  const { createJsonDriver } = await import('./store/json-driver.js');
+  const { createDynamoDriver } = await import('./store/dynamo-driver.js');
+  const { migrateStore } = await import('./store/migrate.js');
+
+  const source = createJsonDriver({ directory: config.paths.data });
+  const target = createDynamoDriver({
+    tableName: config.store.tableName,
+    region: config.store.region,
+  });
+
+  console.log(`\n${config.paths.data}  ->  DynamoDB table "${config.store.tableName}" (${config.store.region})\n`);
+
+  const summary = await migrateStore({ source, target, apply: confirmed });
+
+  line();
+  console.log(`Articles:  ${summary.articles.copied} to copy, ${summary.articles.skipped} already there`);
+  console.log(`Posts:     ${summary.posts.copied} to copy, ${summary.posts.skipped} already there`);
+  line();
+
+  console.log('State:');
+  for (const row of summary.state) {
+    const mark = row.changed ? '*' : ' ';
+    console.log(`  ${mark} ${row.key.padEnd(24)} ${JSON.stringify(row.from)} -> ${JSON.stringify(row.to)}   (${row.reason})`);
+  }
+
+  console.log(confirmed
+    ? '\nDone. Local and Lambda now share one memory.\n'
+    : '\nDRY RUN, nothing was written. To apply:\n\n  npm run store:migrate -- --confirm\n');
+}
+
 const COMMANDS = {
   run: runCommand,
   publish: publishCommand,
   'preview-templates': previewTemplatesCommand,
+  'migrate-store': migrateStoreCommand,
 };
 
 const handler = COMMANDS[command];

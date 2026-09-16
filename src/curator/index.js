@@ -11,6 +11,7 @@
 
 import { createLogger } from '../lib/logger.js';
 import { scoreMemeability, extractTopics } from './meme-score.js';
+import { FRAME_NAMES, UNKNOWN_FRAME, describeFrames } from './frames.js';
 
 const log = createLogger('curator');
 
@@ -35,24 +36,79 @@ BAD picks, no matter how big the news:
 - lawsuits, regulation, policy. Boring and heavy.
 - funding rounds with no technical detail.
 
+FRAMES
+Every story gets told from an angle. These are the ones this page uses:
+${describeFrames()}
+
+The page cannot be the same frame every time. Two "something failed" posts in
+a row read as one miserable page with one opinion, even when the two stories
+share no companies at all. If you are told a frame has been used recently,
+pick something else unless the story is genuinely too good to pass up.
+
 For each story you pick, give:
   angle      the take the post should argue, in one sentence. A point of
              view, not a summary.
   joke       what is actually funny here, in a few words. If you cannot fill
              this in, you picked the wrong story.
+  frame      one of: ${FRAME_NAMES.join(', ')}
 
 Reply as JSON:
 {"picks": [{"id": "...", "rank": 1, "reason": "why this beats the others",
 "angle": "the take to argue", "joke": "what is funny about it",
+"frame": "one of the frames above",
 "memeFormat": "a meme framing in a few words"}]}`;
+
+/**
+ * Stop one kind of story taking over the shortlist.
+ *
+ * The soft score penalty handles continuity between runs, but it cannot help
+ * inside a single run: if the eight highest-scoring stories are all failures,
+ * the model has no other option to choose, whatever the prompt asks for. So
+ * the list is filled in score order with a hard cap per frame, and only topped
+ * up past the cap if there is nothing else left.
+ *
+ * @param {object[]} scored  articles sorted best first, each with a guessedFrame
+ */
+export function diversifyShortlist(scored, size, maxPerFrame) {
+  const counts = new Map();
+  const picked = [];
+  const overflow = [];
+
+  for (const article of scored) {
+    const frame = article.guessedFrame;
+    const used = counts.get(frame) ?? 0;
+
+    // Stories we could not read are not a category, so capping them would
+    // drop good stories for failing to match a keyword.
+    if (frame !== UNKNOWN_FRAME && used >= maxPerFrame) {
+      overflow.push(article);
+      continue;
+    }
+
+    counts.set(frame, used + 1);
+    picked.push(article);
+
+    if (picked.length >= size) break;
+  }
+
+  // A thin day beats an empty one, so fall back to the plain ranking.
+  return [...picked, ...overflow].slice(0, size);
+}
 
 export function createCurator({ config, llm, store }) {
   const settings = config.curator;
 
-  /** Topics we have covered recently, so we don't repeat ourselves. */
-  async function getRecentTopics() {
-    const recent = await store.listRecentPublished(settings.topicCooldownPosts);
-    return recent.flatMap((post) => post.topics ?? []);
+  /**
+   * What we have covered recently, in both senses: the companies and the kind
+   * of story. Newest first, so the callers that care about order get it.
+   */
+  async function getRecent() {
+    const recent = await store.listRecentAttempted(settings.topicCooldownPosts);
+
+    return {
+      topics: recent.flatMap((post) => post.topics ?? []),
+      frames: recent.map((post) => post.frame).filter(Boolean),
+    };
   }
 
   /** A one-line summary of what has been working, fed back into the prompt. */
@@ -78,18 +134,22 @@ export function createCurator({ config, llm, store }) {
         return [];
       }
 
-      const recentTopics = await getRecentTopics();
+      const recent = await getRecent();
 
-      // Cheap pass: score everything, keep the top handful.
-      const shortlist = relevant
-        .map((article) => ({ ...article, ...scoreMemeability(article, settings, recentTopics) }))
-        .sort((a, b) => b.memeScore - a.memeScore)
-        .slice(0, settings.shortlistSize);
+      // Cheap pass: score everything, then fill the shortlist in score order
+      // without letting one kind of story take it over.
+      const scored = relevant
+        .map((article) => ({ ...article, ...scoreMemeability(article, settings, recent) }))
+        .sort((a, b) => b.memeScore - a.memeScore);
+
+      const shortlist = diversifyShortlist(scored, settings.shortlistSize, settings.maxPerFrame);
 
       log.info('Shortlist built', {
         candidates: relevant.length,
         shortlisted: shortlist.length,
         topScore: shortlist[0]?.memeScore,
+        frames: [...new Set(shortlist.map((article) => article.guessedFrame))],
+        recentFrames: recent.frames,
       });
 
       // If we only need as many as we have, the model has nothing to choose
@@ -102,6 +162,7 @@ export function createCurator({ config, llm, store }) {
             reason: `Only ${shortlist.length} candidates available. ${article.reasons.join('; ')}`,
             angle: '',
             joke: '',
+            frame: article.guessedFrame,
             memeFormat: '',
             decidedBy: 'heuristic',
           },
@@ -117,6 +178,11 @@ export function createCurator({ config, llm, store }) {
         `signals: ${article.reasons.join(', ') || 'none'}`,
       ].join('\n')).join('\n---\n');
 
+      // Newest first, so "the last one" is unambiguous to the model.
+      const frameNote = recent.frames.length
+        ? `\n\nFrames used in the last ${recent.frames.length} posts, newest first: ${recent.frames.join(', ')}. Avoid repeating them.`
+        : '';
+
       let picks = [];
 
       try {
@@ -125,7 +191,7 @@ export function createCurator({ config, llm, store }) {
           temperature: 0.7,
           maxTokens: 700,
           system: SYSTEM_PROMPT + learnings,
-          user: `Pick the best ${count} of these ${shortlist.length} stories.\n\n${candidateList}`,
+          user: `Pick the best ${count} of these ${shortlist.length} stories.${frameNote}\n\n${candidateList}`,
         });
         picks = Array.isArray(result.picks) ? result.picks : [];
       } catch (error) {
@@ -148,6 +214,9 @@ export function createCurator({ config, llm, store }) {
               reason: String(pick.reason ?? ''),
               angle: String(pick.angle ?? ''),
               joke: String(pick.joke ?? ''),
+              // Models invent frame names. Fall back to our own guess rather
+              // than storing something the cooldown will never match again.
+              frame: FRAME_NAMES.includes(pick.frame) ? pick.frame : article.guessedFrame,
               memeFormat: String(pick.memeFormat ?? ''),
               decidedBy: 'llm',
             },
@@ -169,6 +238,7 @@ export function createCurator({ config, llm, store }) {
           reason: article.reasons.join('; ') || 'Highest heuristic score',
           angle: '',
           joke: '',
+          frame: article.guessedFrame,
           memeFormat: '',
           decidedBy: 'heuristic',
         },

@@ -90,10 +90,27 @@ export function scoreHook(hook, maxChars = 140) {
 }
 
 /**
- * Rank every candidate and return the winner plus the full scoreboard, so a
- * dry run can show why one line was chosen over the others.
+ * Rank every candidate and pick one, plus the full scoreboard so a dry run
+ * can show what it was choosing between.
+ *
+ * Not a strict argmax. The rules above are crude - they measure length,
+ * clichés and punctuation, not whether a line is any good - so a 0.70 and a
+ * 0.68 are the same hook as far as this function actually knows. Taking the
+ * exact maximum every time turned that noise into a rule, and since the model
+ * lists its safest line first, the safest line kept winning ties. Four
+ * candidates scoring identically is normal; always shipping the first one is
+ * how a page ends up with one voice.
+ *
+ * So anything within `jitter` of the top is a real contender and one is
+ * picked at random. `random` is injectable to keep the tests deterministic.
+ *
+ * @param {string[]} hooks
+ * @param {object} [options]
+ * @param {number} [options.maxChars]  hard limit before LinkedIn truncates
+ * @param {number} [options.jitter]    how far below the top still counts
+ * @param {function} [options.random]  0-1 source, for tests
  */
-export function pickBestHook(hooks, maxChars = 140) {
+export function pickBestHook(hooks, { maxChars = 140, jitter = 0, random = Math.random } = {}) {
   const scored = (hooks ?? [])
     .map((hook) => ({ hook: String(hook ?? '').trim(), ...scoreHook(hook, maxChars) }))
     .filter((entry) => entry.hook)
@@ -101,7 +118,19 @@ export function pickBestHook(hooks, maxChars = 140) {
 
   if (!scored.length) return { best: '', scored: [] };
 
-  return { best: scored[0].hook, scored };
+  // The list is sorted, so the contenders are always a prefix of it.
+  const cutoff = scored[0].score - jitter;
+  const contenders = scored.filter((entry) => entry.score >= cutoff);
+
+  // Math.random() can return values that floor to the length on some engines,
+  // so clamp rather than trust it.
+  const index = Math.min(contenders.length - 1, Math.floor(random() * contenders.length));
+
+  return {
+    best: contenders[index].hook,
+    scored: scored.map((entry, position) => ({ ...entry, chosen: position === index })),
+    contenders: contenders.length,
+  };
 }
 
 export default { scoreHook, pickBestHook, CLICHES };

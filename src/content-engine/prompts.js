@@ -6,7 +6,7 @@
  * trying to avoid.
  */
 
-import { getShape } from './shapes.js';
+import { getShape, getCloserStyle, fieldsFor, targetWords } from './shapes.js';
 
 /**
  * Each opening style is a different way to start a post. We rotate through
@@ -45,16 +45,22 @@ Think Fireship (the YouTube channel): fast, technically literate, sarcastic,
 allergic to filler. Meme-page bluntness with real engineering knowledge behind it.
 
 HARD RULES
-- Under 200 words total. Shorter is better.
+- You are given a LENGTH to hit for this specific post. Hit it. Posts are
+  deliberately different lengths, so do not drift back towards a comfortable
+  middle. When in doubt, come in under it.
 - Line one is the hook. It has to work on its own, before LinkedIn's "see more"
   cut, in under 140 characters.
 - Paragraphs are 1-2 lines. Never a wall of text.
 - Include at least one concrete detail from the article: a number, a product
   name, a version, a direct quote. Vague posts read as filler.
 - Take a position. You are not summarising the news, you are reacting to it.
-- The SHAPE you are given decides how the post is built and how it ends.
-  Follow it exactly. If the shape says no closing question, there is no
-  closing question.
+- The SHAPE you are given decides how the post is built. Follow it exactly.
+- The ENDING you are given decides how it stops. Follow that exactly too. If
+  you are told not to end with a question, there is no question, and no
+  softer version of one either.
+- The hook is written separately and the reader has already read it. Do not
+  restate it, do not rephrase it, do not begin by summarising the headline.
+  Carry on from it.
 - 3 to 5 hashtags, specific and niche.
 
 NEVER DO THIS
@@ -71,9 +77,9 @@ Write the way a senior engineer types on their phone between meetings. Some
 sentences are fragments. Contractions everywhere. Occasional lowercase for
 emphasis. Confident, a bit tired, genuinely knows the subject.`;
 
-/** Render one shape's fields as the JSON keys we want back. */
-function fieldSchema(shape) {
-  return shape.fields
+/** Render the fields we want back as JSON keys, once the ending is known. */
+function fieldSchema(shape, closerStyle) {
+  return fieldsFor(shape, closerStyle)
     .map((field) => {
       const value = field.type === 'string[]'
         ? `["${field.description}"]`
@@ -91,9 +97,26 @@ function fieldSchema(shape) {
  * (see hook-scorer.js), which is cheaper and more reliable than asking the
  * model to self-select its best line.
  */
-export function buildUserPrompt({ article, shape: shapeName, style, hookCount, hashtagRules, learnings }) {
+export function buildUserPrompt({
+  article,
+  shape: shapeName,
+  style,
+  closerStyle,
+  lengthMood,
+  maxWords,
+  hookCount,
+  hashtagRules,
+  learnings,
+}) {
   const shape = getShape(shapeName);
   const styleGuide = OPENING_STYLES[style] ?? OPENING_STYLES['blunt-claim'];
+  const length = targetWords(shape, lengthMood, maxWords);
+
+  // Shapes that end themselves are not given an ending to follow. A zinger
+  // told to add a closing question stops being a zinger.
+  const endingGuide = shape.closer === 'rotate'
+    ? `\nHOW THIS POST ENDS: ${closerStyle}\n${getCloserStyle(closerStyle).instruction}\n`
+    : '';
 
   // Some shapes own their first line - a rotating opener would fight the
   // quote or the log block for the top of the post.
@@ -117,6 +140,10 @@ Land this joke. Do not explain it. If the post is not funny, it has failed.
 SHAPE FOR THIS POST: ${shapeName}
 ${shape.instruction}
 
+LENGTH FOR THIS POST: about ${length.target} words, ${length.max} at the
+absolute most. Hashtags do not count.
+${length.instruction}
+${endingGuide}
 THE FIRST LINE
 ${hookGuide}
 
@@ -131,7 +158,7 @@ Write ${hookCount} different first lines, then the rest of the post once.
 Reply as JSON:
 {
   "hooks": ["${hookCount} different opening lines, each under 140 chars"],
-${fieldSchema(shape)},
+${fieldSchema(shape, closerStyle)},
   "hashtags": ["#Example"],
   "memeTopText": "top line of the meme image, under 40 chars, all caps works",
   "memeBottomText": "punchline, under 50 chars",

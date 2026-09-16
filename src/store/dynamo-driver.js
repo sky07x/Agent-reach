@@ -19,8 +19,14 @@ import {
   BatchWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 
-export function createDynamoDriver({ tableName, region }) {
-  const client = DynamoDBDocumentClient.from(new DynamoDBClient({ region }), {
+/**
+ * @param {object} options
+ * @param {object} [options.client]  a ready-made document client. Only the
+ *   tests pass this, so the single-table key mapping and the paging loop can
+ *   be exercised without an AWS account.
+ */
+export function createDynamoDriver({ tableName, region, client: injected }) {
+  const client = injected ?? DynamoDBDocumentClient.from(new DynamoDBClient({ region }), {
     marshallOptions: { removeUndefinedValues: true },
   });
 
@@ -57,6 +63,13 @@ export function createDynamoDriver({ tableName, region }) {
       return item;
     },
 
+    /**
+     * Write many rows at once, overwriting rather than merging.
+     *
+     * Note the difference from put(): a batch write cannot read first, so
+     * this replaces each row outright. Only ever call it with rows that are
+     * new. saveNewArticles does exactly that, which is why it is safe.
+     */
     async putMany(collection, items) {
       // BatchWrite caps at 25 items per call, so send it in chunks.
       for (let start = 0; start < items.length; start += 25) {

@@ -14,6 +14,8 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { createLogger } from '../lib/logger.js';
 import { renderSvg, LAYOUTS } from './layouts.js';
+import { createRotation } from '../lib/rotation.js';
+import { MEDIA_TREATMENTS, getTreatment, isTextOnly, pickTemplate } from './media.js';
 
 const log = createLogger('meme-generator');
 
@@ -25,6 +27,7 @@ function withFallback(text, fallback) {
 
 export function createMemeGenerator({ config, store }) {
   const settings = config.memeGenerator;
+  const rotation = createRotation({ store });
 
   /** Read every template JSON file once per process. */
   let templatesPromise;
@@ -59,18 +62,33 @@ export function createMemeGenerator({ config, store }) {
   }
 
   /**
-   * Choose a template we have not used recently, so the feed does not start
-   * looking repetitive.
+   * Choose a template that suits the post and has not been seen lately.
+   *
+   * Both halves of "lately" matter. The old version tracked the template name
+   * only, so hot-take followed by red-alert counted as variety when they are
+   * the same classic layout in different colours - a third of the library is
+   * that one layout.
    */
-  async function pickTemplate() {
+  async function choose({ preferLayouts = [] } = {}) {
     const templates = await getTemplates();
-    const recent = await store.listRecentPublished(settings.templateCooldown);
-    const recentlyUsed = new Set(recent.map((post) => post.memeTemplate).filter(Boolean));
+    const recent = await store.listRecentAttempted(settings.templateHistory);
 
-    const available = templates.filter((template) => !recentlyUsed.has(template.name));
-    const pool = available.length ? available : templates;
+    const { template, scored } = pickTemplate(templates, {
+      recentTemplates: recent.map((post) => post.memeTemplate).filter(Boolean),
+      recentLayouts: recent.map((post) => post.memeLayout).filter(Boolean),
+      cooldown: settings.templateCooldown,
+      preferLayouts,
+      weights: settings.selectionWeights,
+    });
 
-    return pool[Math.floor(Math.random() * pool.length)];
+    log.debug('Template chosen', {
+      picked: template.name,
+      layout: template.layout,
+      runnerUp: scored[1]?.name,
+      affine: scored[0]?.affine,
+    });
+
+    return template;
   }
 
   return {
@@ -85,23 +103,33 @@ export function createMemeGenerator({ config, store }) {
      * @param {object} input
      * @param {string} input.topText
      * @param {string} input.bottomText
-     * @param {string} [input.footer]        small credit line, e.g. the source
-     * @param {string} [input.templateName]  force a specific template
-     * @returns {Promise<{buffer: Buffer, template: string}>}
+     * @param {string} [input.footer]         small credit line, e.g. the source
+     * @param {string} [input.templateName]   force a specific template
+     * @param {string} [input.treatment]      which media treatment to render at
+     * @param {string[]} [input.preferLayouts] layouts that suit this post
+     * @returns {Promise<{buffer: Buffer, template: string, layout: string, treatment: string}|null>}
+     *   null when the treatment is text-only, which is a real choice and not
+     *   a failure - callers must handle a post with no picture.
      */
-    async render({ topText, bottomText, footer, templateName }) {
+    async render({ topText, bottomText, footer, templateName, treatment = 'meme-square', preferLayouts }) {
+      if (isTextOnly(treatment)) {
+        log.info('Text-only post, no image rendered', { treatment });
+        return null;
+      }
+
       const templates = await getTemplates();
+      const { width, height } = getTreatment(treatment);
 
       const template = templateName
         ? templates.find((candidate) => candidate.name === templateName)
-        : await pickTemplate();
+        : await choose({ preferLayouts });
 
       if (!template) throw new Error(`No meme template named "${templateName}"`);
 
       const svg = renderSvg({
         template,
-        width: settings.width,
-        height: settings.height,
+        width,
+        height,
         topText: withFallback(topText, 'ANOTHER DAY'),
         bottomText: withFallback(bottomText, 'ANOTHER MODEL'),
         footer,
@@ -109,18 +137,43 @@ export function createMemeGenerator({ config, store }) {
 
       const buffer = await sharp(Buffer.from(svg)).png().toBuffer();
 
-      log.info('Meme rendered', { template: template.name, bytes: buffer.length });
-      return { buffer, template: template.name };
+      log.info('Meme rendered', {
+        template: template.name,
+        layout: template.layout,
+        treatment,
+        size: `${width}x${height}`,
+        bytes: buffer.length,
+      });
+
+      return { buffer, template: template.name, layout: template.layout, treatment };
     },
 
-    /** Render and write to disk. Returns the file path. */
+    /** Render and write to disk. Returns null for a text-only post. */
     async renderToFile(input, filePath) {
-      const { buffer, template } = await this.render(input);
+      const rendered = await this.render(input);
+      if (!rendered) return null;
 
       await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, buffer);
+      await fs.writeFile(filePath, rendered.buffer);
 
-      return { path: filePath, template };
+      return { ...rendered, path: filePath };
+    },
+
+    /**
+     * Which media treatment this post gets.
+     *
+     * Same store-backed rotation as the writing side, so it survives a cold
+     * Lambda and rebuilds itself from post history if the counter is lost.
+     * It counts posts that recorded a treatment, so the older posts from
+     * before this existed do not skew the position.
+     */
+    async nextTreatment(names) {
+      return (await rotation.next({
+        key: 'mediaRotationIndex',
+        names,
+        known: MEDIA_TREATMENTS,
+        seed: (posts) => posts.filter((post) => post.mediaTreatment).length,
+      })) ?? 'meme-square';
     },
   };
 }

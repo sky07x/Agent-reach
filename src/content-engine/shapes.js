@@ -9,6 +9,10 @@
  * So a shape owns two things: what we ask the model for, and how the pieces
  * are glued back together. Adding a new shape means adding one entry here and
  * one name in config.content.postShapes. Nothing else changes.
+ *
+ * How a post ENDS rotates separately, in CLOSER_STYLES below, because "always
+ * finish with a question" was its own kind of sameness. A shape either takes
+ * a turn of that rotation (closer: 'rotate') or ends itself (closer: 'own').
  */
 
 /**
@@ -31,6 +35,120 @@ function tagLine(hashtags) {
   return (hashtags ?? []).join(' ');
 }
 
+/**
+ * How a post ends.
+ *
+ * Every post used to end with a question, because the writing prompt asked
+ * for one every single time. Two posts in a row closing with "how long until
+ * X?" and "when will we learn Y?" is the single loudest tell that a feed is
+ * coming off a production line, and it is also the most tiring thing to read.
+ *
+ * So the ending rotates on its own counter, and one of the options is to not
+ * have one. A post that just stops reads like a person who said their piece.
+ */
+export const CLOSER_STYLES = {
+  'argument-bait': {
+    instruction: 'End on a question someone will want to argue with in the comments.',
+    field: 'a specific question people will argue about, never "what do you think?"',
+  },
+  'flat-verdict': {
+    instruction: 'End on a flat verdict. A statement, not a question. Do not soften it.',
+    field: 'a flat verdict, under 10 words, no question mark',
+  },
+  prediction: {
+    instruction: 'End by calling what happens next, stated as fact, with no hedging.',
+    field: 'what happens next, stated as fact, under 15 words, no question mark',
+  },
+  dare: {
+    instruction: 'End by daring the reader to disagree, or betting against them.',
+    field: 'a dare or a bet, under 15 words',
+  },
+  aside: {
+    instruction: `End on a throwaway aside, the way someone mutters the last
+line of a story. Lowercase is fine. It should feel unplanned.`,
+    field: 'a throwaway aside, lowercase, under 10 words',
+  },
+  none: {
+    instruction: `The post just stops after the last line. No closing line, no
+question, no call to action. Do not wrap anything up.`,
+    field: null,
+  },
+};
+
+export function getCloserStyle(name) {
+  return CLOSER_STYLES[name] ?? CLOSER_STYLES['argument-bait'];
+}
+
+/**
+ * How long a post runs.
+ *
+ * Every post landing at roughly 150 words is its own kind of sameness. It is
+ * subtler than a repeated closing question, but a feed where every entry
+ * occupies the same amount of screen is obviously machine-paced.
+ *
+ * The mood picks a point inside the shape's own word range rather than a
+ * global one, because the ranges are not comparable: 'full' for a zinger is
+ * still shorter than 'tight' for a classic take, and a 150-word zinger is not
+ * a zinger.
+ */
+export const LENGTH_MOODS = {
+  tight: {
+    position: 0,
+    instruction: 'Cut it to the bone. Every word you can delete, delete.',
+  },
+  short: {
+    position: 0.35,
+    instruction: 'Keep it brief. Say it and stop.',
+  },
+  mid: {
+    position: 0.7,
+    instruction: 'You have room to make the point properly, but do not pad it.',
+  },
+  full: {
+    position: 1,
+    instruction: `Take the space. Let it breathe, add the detail that makes it
+specific. Still no filler.`,
+  },
+};
+
+export function getLengthMood(name) {
+  return LENGTH_MOODS[name] ?? LENGTH_MOODS.mid;
+}
+
+/**
+ * The word count to aim for, given a shape and a mood.
+ *
+ * @returns {{target: number, max: number, instruction: string}}
+ */
+export function targetWords(shape, moodName, ceiling = Infinity) {
+  const mood = getLengthMood(moodName);
+  const { min, max } = shape.words;
+
+  return {
+    target: Math.round(min + mood.position * (max - min)),
+    max: Math.min(max, ceiling),
+    instruction: mood.instruction,
+  };
+}
+
+/**
+ * The fields to ask the model for, once the closer style is known.
+ *
+ * Shapes that end themselves keep their own fields. For the rest, the chosen
+ * ending rewrites the closer field, or drops it entirely.
+ */
+export function fieldsFor(shape, closerStyleName) {
+  if (shape.closer !== 'rotate') return shape.fields;
+
+  const style = getCloserStyle(closerStyleName);
+
+  if (!style.field) return shape.fields.filter((field) => field.key !== 'closer');
+
+  return shape.fields.map((field) => (field.key === 'closer'
+    ? { ...field, description: style.field }
+    : field));
+}
+
 export const POST_SHAPES = {
   /**
    * The original shape. Still the best one for a story with a real argument
@@ -38,7 +156,11 @@ export const POST_SHAPES = {
    */
   'classic-take': {
     instruction: `Hook, then two or three short lines making your case, then a
-closing line that starts an argument. Every line earns its place.`,
+closing line. Every line earns its place.`,
+    closer: 'rotate',
+    words: { min: 55, max: 155 },
+    // No strong affinity: an argument can be illustrated any number of ways.
+    layouts: [],
     fields: [
       {
         key: 'body',
@@ -61,8 +183,13 @@ closing line that starts an argument. Every line earns its place.`,
    */
   'two-line-zinger': {
     instruction: `Two lines. That is the whole post. The hook, then one line
-that lands the punch. Under 25 words total. Do not add context, do not explain,
-do not ask a question. Trust the reader.`,
+that lands the punch. Do not add context, do not explain, do not ask a
+question. Trust the reader.`,
+    // Owns its ending: a zinger with anything after it is not a zinger.
+    closer: 'own',
+    words: { min: 14, max: 30 },
+    // Big bold type for a line meant to stop a thumb.
+    layouts: ['classic'],
     fields: [
       {
         key: 'punchline',
@@ -88,6 +215,11 @@ do not ask a question. Trust the reader.`,
 each one its own paragraph. Sentences get shorter as you go. End on a flat
 statement, not a question. Never ask the reader anything. The last line should
 feel like you put the phone down after typing it.`,
+    // Owns its ending: stopping dead is the whole point of the shape.
+    closer: 'own',
+    words: { min: 40, max: 105 },
+    // A rant is someone talking, so give it a voice on the image too.
+    layouts: ['chat', 'classic'],
     fields: [
       {
         key: 'lines',
@@ -101,7 +233,7 @@ feel like you put the phone down after typing it.`,
       },
     ],
     assemble: ({ hook, parts, hashtags }) =>
-      blocks(hook, ...parts.lines, parts.closer, tagLine(hashtags)),
+      blocks(hook, ...(parts.lines ?? []), parts.closer, tagLine(hashtags)),
   },
 
   /**
@@ -113,6 +245,11 @@ feel like you put the phone down after typing it.`,
 output that tells the story, then one line reacting to it. The log lines must
 look like real output: prefixes, timestamps, exit codes, stack frames. Make
 them technically plausible for the story. No more than five lines.`,
+    closer: 'rotate',
+    // The log block eats most of the budget, so the prose around it is short.
+    words: { min: 35, max: 85 },
+    // The obvious one. A post that is fake terminal output gets a terminal.
+    layouts: ['terminal'],
     fields: [
       {
         key: 'logLines',
@@ -139,6 +276,9 @@ them technically plausible for the story. No more than five lines.`,
 with who said it. Then one line of reaction. The reaction does the work, so
 keep it to a single sentence. If the story has no usable quote, use the most
 absurd exact phrase from it instead.`,
+    closer: 'rotate',
+    words: { min: 22, max: 60 },
+    layouts: ['quote'],
     overrideHook: `The first line is the quote itself, in quotation marks,
 followed by an em-dash-free attribution on the same line or the next one.
 Example shape: "We don't see this as a security risk." - the CTO, last week.`,
@@ -164,16 +304,24 @@ Example shape: "We don't see this as a security risk." - the CTO, last week.`,
    * AI-writing tell there is.
    */
   receipts: {
-    instruction: `Tell what actually happened as a short sequence of beats,
-one per line, each starting with a lowercase word or a bare fact. Use two or
-four beats, never three, and make them different lengths. No bullet
-characters, no numbering, no parallel sentence structure. Then one line of
-verdict.`,
+    instruction: `Tell what actually happened as a short sequence of beats.
+
+A beat is a fragment, not a sentence. Three to six words. No verb is fine.
+"funding closed friday" is a beat. "Meta launched a new MCP server that lets
+AI agents set up messaging" is not, that is a press release.
+
+Use two or four beats, never three, and make them different lengths. Start
+each one lowercase. No bullet characters, no numbering, no two beats built the
+same way. Then one line of verdict.`,
+    closer: 'rotate',
+    words: { min: 25, max: 70 },
+    // Beats are a sequence, and two-panel is the before/after shape.
+    layouts: ['two-panel'],
     fields: [
       {
         key: 'beats',
         type: 'string[]',
-        description: 'two or four beats, one per line, uneven lengths, no bullets or numbers',
+        description: 'two or four fragments of three to six words each, lowercase, uneven, no bullets',
       },
       {
         key: 'closer',
@@ -197,11 +345,16 @@ export function getShape(name) {
  * Pull this shape's fields out of the model's JSON and coerce them into the
  * types the assembler expects. A model that returns a string where we wanted
  * an array is a normal Tuesday, so handle it rather than throwing.
+ *
+ * It reads the same field list the prompt asked for, which matters for the
+ * "none" ending: we stop asking for a closer, but a model will often volunteer
+ * one anyway, and reading it back would put the closing line straight back on
+ * a post that is supposed to just stop.
  */
-export function normalizeParts(shape, result) {
+export function normalizeParts(shape, result, closerStyle) {
   const parts = {};
 
-  for (const field of shape.fields) {
+  for (const field of fieldsFor(shape, closerStyle)) {
     const raw = result?.[field.key];
 
     if (field.type === 'string[]') {

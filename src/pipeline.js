@@ -10,6 +10,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createLogger } from './lib/logger.js';
+import { countWords } from './content-engine/index.js';
+import { getShape } from './content-engine/shapes.js';
 import { getUsage, resetUsage } from './lib/llm-client.js';
 
 const log = createLogger('pipeline');
@@ -60,6 +62,7 @@ export function createPipeline(agent) {
       await store.updateArticle(article.id, {
         curation: article.curation,
         topics: article.topics,
+        guessedFrame: article.guessedFrame,
         memeScore: article.memeScore,
         body: article.body,
       });
@@ -77,18 +80,29 @@ export function createPipeline(agent) {
 
     const postId = newPostId();
 
-    const { buffer, template } = await memeGenerator.render({
+    const treatment = await memeGenerator.nextTreatment(config.memeGenerator.treatments);
+
+    // The picture is chosen to suit the post, not drawn from a hat: a
+    // terminal-log post asks for a terminal, a quote-reaction for a quote.
+    const rendered = await memeGenerator.render({
       topText: draft.meme.topText,
       bottomText: draft.meme.bottomText,
       footer: config.memeGenerator.footer,
+      treatment,
+      preferLayouts: getShape(draft.shape).layouts,
     });
 
-    // Write the image here rather than in the publish step, so a dry run
-    // leaves something you can actually open and look at. Reviewing the post
-    // is the entire point of a dry run.
-    const memePath = path.join(config.paths.output, `${postId}.png`);
-    await fs.mkdir(config.paths.output, { recursive: true });
-    await fs.writeFile(memePath, buffer);
+    // Null is a real answer, not a failure: this post is text-only.
+    let memePath = null;
+
+    if (rendered) {
+      // Write the image here rather than in the publish step, so a dry run
+      // leaves something you can actually open and look at. Reviewing the
+      // post is the entire point of a dry run.
+      memePath = path.join(config.paths.output, `${postId}.png`);
+      await fs.mkdir(config.paths.output, { recursive: true });
+      await fs.writeFile(memePath, rendered.buffer);
+    }
 
     const post = {
       id: postId,
@@ -100,21 +114,30 @@ export function createPipeline(agent) {
       hashtags: draft.hashtags,
       shape: draft.shape,
       openingStyle: draft.openingStyle,
+      closerStyle: draft.closerStyle,
+      lengthMood: draft.lengthMood,
+      // Recounted after the humanizer, which is allowed to shorten the post.
+      words: countWords(humanized.text),
+      targetWords: draft.targetWords,
       topics: article.topics ?? [],
-      memeTemplate: template,
+      frame: article.curation?.frame ?? null,
+      mediaTreatment: treatment,
+      memeTemplate: rendered?.template ?? null,
+      memeLayout: rendered?.layout ?? null,
       memePath,
       memeText: draft.meme,
       curationReason: article.curation?.reason ?? '',
       angle: article.curation?.angle ?? '',
       humanizerReport: humanized.report,
       hookScoreboard: draft.hookScoreboard,
+      hashtagReasons: draft.hashtagReasons,
       status: 'draft',
       createdAt: new Date().toISOString(),
     };
 
     await store.savePost(post);
 
-    return { post, imageBuffer: buffer };
+    return { post, imageBuffer: rendered?.buffer ?? undefined };
   }
 
   /** Send one finished post out. */

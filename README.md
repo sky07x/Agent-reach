@@ -28,7 +28,7 @@ Then:
 
 ```bash
 npm run dev                   # admin API on :3001 + cron scheduler
-npm test                      # 67 tests, no network needed
+npm test                      # 170 tests, no network needed
 npm run templates:preview     # render every meme template to data/out/
 npm run linkedin:auth         # one-time LinkedIn OAuth, writes .env for you
 ```
@@ -44,7 +44,7 @@ npm run linkedin:auth         # one-time LinkedIn OAuth, writes .env for you
 | 3. Curate | `src/curator/` | Scores "meme-ability", shortlists 8, then one call ranks them and gives each pick an angle. | 1 per run |
 | 4. Write | `src/content-engine/` | One call returns 4 hooks and the post. Each post is written to a different shape, and we pick the hook with plain rules. | 1 per post |
 | 5. Humanize | `src/humanizer/` | Strips AI tells mechanically, then one editor pass, then strips again. | 1 per post |
-| 6. Meme | `src/meme-generator/` | Draws the image locally with sharp. | 0 |
+| 6. Media | `src/meme-generator/` | Rotates square / portrait / text-only, then picks a template that suits the post. Drawn locally with sharp. | 0 |
 | 7. Publish | `src/publisher/` | LinkedIn API, or the console provider which saves to disk. | 0 |
 | 8. Learn | `src/store/analytics.js` | Pulls likes/comments back, works out what did well, writes it into the prompts. | 0 |
 
@@ -217,6 +217,42 @@ No code changes. To add a third provider, add one function to
 take `{system, user, model, temperature, maxTokens, json}` and return
 `{text, inputTokens, outputTokens}`.
 
+### Story frames
+
+A frame is the angle a story gets told from, and it is what a reader actually
+notices repeating. Dedupe used to run on proper nouns alone, so "Cymphony
+raises to fix rogue agents" and "Relay shut down, 42% of AI projects failed"
+looked unrelated. They are the same post: *AI is failing*. A day apart, that
+reads as a page with one opinion.
+
+Seven frames live in [src/curator/frames.js](src/curator/frames.js): `broke`,
+`hype-check`, `absurd-money`, `shipped`, `foot-gun`, `irony`, `grind`.
+
+Two layers decide them:
+
+1. A **cheap keyword guess** runs on every shortlist candidate. It only shapes
+   the shortlist, never the stored answer, because it is wrong often enough
+   that it should not get the final say. A story it cannot read is labelled
+   `unclear` rather than guessed at, and `unclear` is exempt from both the
+   penalty and the cap — an absence of evidence is not evidence of repetition.
+2. The **model assigns the real frame** in the curation call it was already
+   making. That is what gets stored on the post and cooled down. A frame it
+   invents falls back to the guess.
+
+Two mechanisms use it:
+
+- A **soft score penalty** (`curator.framePenalty`) for frames used in recent
+  posts, halved when the guess is not confident. This carries between runs.
+- A **hard cap** (`curator.maxPerFrame`) on how many of one frame can fill the
+  shortlist. This is the one that matters: the penalty cannot help inside a
+  single run, because if the eight highest scorers are all failures the model
+  has nothing else it could pick, whatever the prompt asks it to do.
+
+There is also a `positive` signal in `memeSignals`, because every other signal
+rewards something going wrong — `funnyWords` is almost entirely *outage,
+broke, crash, deleted, hacked* — and without a counterweight the page turns
+into one long obituary.
+
 ### Adding a post shape
 
 A shape is the skeleton of a post: what we ask the model for, and how the
@@ -247,8 +283,170 @@ Then add its name to `content.postShapes` in
 the model is asked for, so nothing else needs to change. Set `overrideHook` if
 the shape needs to own its own first line, the way `quote-reaction` does.
 
-The shape rotation (six) and the opening-style rotation (five) advance
-separately, so the same pairing does not come round again for thirty posts.
+### How a post ends
+
+The ending rotates on its own counter, separately from the shape and the
+opener. Six of them live in `CLOSER_STYLES` in the same file:
+
+| Ending | What it does |
+|---|---|
+| `argument-bait` | a question worth arguing with |
+| `flat-verdict` | a statement, no question mark |
+| `prediction` | calls what happens next, as fact |
+| `dare` | dares the reader to disagree |
+| `aside` | a muttered throwaway line |
+| `none` | the post just stops |
+
+`none` is in the list on purpose. Every post ending with a question was the
+loudest sign that a feed came off a production line, and it is tiring to read.
+
+A shape either takes a turn of this rotation (`closer: 'rotate'`) or ends
+itself (`closer: 'own'` — the zinger and the rant, where stopping dead *is*
+the shape). Shapes that end themselves don't consume a turn, so the endings
+stay evenly spread across the posts that actually use one.
+
+### How long a post runs
+
+Each shape carries its own word range, and a rotating *length mood* picks a
+point inside it:
+
+| Shape | Words |
+|---|---|
+| `two-line-zinger` | 14–30 |
+| `quote-reaction` | 22–60 |
+| `receipts` | 25–70 |
+| `terminal-log` | 35–85 |
+| `slow-burn-rant` | 40–105 |
+| `classic-take` | 55–155 |
+
+The moods are `tight` (the bottom of the range), `short`, `mid` and `full`
+(the top). They are listed in `content.lengthMoods` in a deliberately
+non-monotonic order — `tight, mid, short, full` — so consecutive posts swing
+between lengths instead of ramping up and resetting.
+
+The ranges are per shape rather than global because they are not comparable: a
+`full` zinger is still shorter than a `tight` classic take, and a 150-word
+zinger is not a zinger.
+
+`content.maxWords` is a hard ceiling over all of them. Nothing is trimmed to
+fit — cutting a post mid-sentence does more damage than the overrun — but an
+overrun is logged, because a shape that always overshoots has a prompt that
+needs work.
+
+Four rotations of six, five, six and four advance independently, so the same
+combination is effectively out of reach.
+
+### Choosing the hook
+
+The model writes four opening lines and
+[hook-scorer.js](src/content-engine/hook-scorer.js) picks one with plain
+rules. It is not a strict argmax, and that matters more than it sounds.
+
+The scorer measures length, clichés, numbers and punctuation. It cannot tell
+whether a line is actually funny. Across the first seven real posts, **five
+had all four candidates scoring identically** — so the ranking decided
+nothing, and the tie always went to whichever line the model happened to list
+first, which is reliably its safest.
+
+So anything within `content.hookJitter` of the top score is a contender and
+one is picked at random. On those same seven posts that takes the number of
+hooks that could actually ship from one to 3.4 on average, while a genuinely
+weaker line still never wins — one post correctly narrowed to a single
+contender because its best hook really was better.
+
+An exact tie is broken at random even at `hookJitter: 0`, because a tie is
+precisely the case where the scorer has no opinion. A dry run marks the line
+that ran with `>` so you can see what it was choosing between.
+
+### Hashtags
+
+Measured over the first thirteen posts, before any of this existed:
+
+```
+#MachineLearning  11 of 13  (85%)      five of the fifteen configured tags
+#AIAgents          9 of 13  (69%)      were never used once
+```
+
+Twelve of the thirteen sets were exactly three tags long, and two pairs of
+posts carried the identical set reordered. The cause: the model was asked for
+tags, the list was topped up from a fixed array read front to back, and
+nothing remembered anything.
+
+Two forces pull against each other here. Variety says rotate; relevance says
+an AI story really does want the AI tags every time. A post tagged
+`#Kubernetes` because `#Kubernetes` was next in a queue is worse than a
+repeated tag — it is a lie about what the post is about.
+
+So **relevance decides who is eligible and variety decides between them**.
+Tags are grouped by subject in
+[src/content-engine/hashtags.js](src/content-engine/hashtags.js) and matched
+to a story through its frame: `foot-gun`→security, `absurd-money`→money,
+`shipped`→code, and so on. Three tiers of relevance — the writer's own picks,
+then the frame's groups, then `core` — and a tag in no tier is never chosen,
+however overdue it is.
+
+On top of that, the same two-horizon pattern as the meme templates:
+
+| Setting | What it does |
+|---|---|
+| `hashtagCooldown` (3) | a tag used this recently is barred |
+| `hashtagMaxShare` (0.4) | no tag may exceed this share of the window |
+| `hashtagHistory` (25) | how far back fatigue is measured |
+| `hashtagSetCooldown` (10) | how far back an exact *set* is compared |
+| `hashtagCounts` | the size rotates, so sets stop being uniformly 3 |
+
+`hashtagMaxShare` is the one that matters — it is what stops the model's
+favourite three tags riding along on every post.
+
+**When a story is genuinely thin**, the bars relax in order (share first, then
+cooldown) but never past relevance. A story that only supports two tags gets
+two; it will not pad. A relaxed run is reported in the log rather than
+happening silently.
+
+Simulated over 50 posts with the writer stubbornly suggesting the same three
+AI tags every time: highest share **28%** (was 85%), **26** distinct tags
+(was 10), sizes spread across 3/4/5, and the closest identical set 12 posts
+apart. `npm run dry-run` prints why each tag was chosen.
+
+### Media
+
+Every post used to get the same thing: a 1200×1200 square with two lines of
+capitals, drawn at random from whatever templates had not been used in the
+last eight posts.
+
+**What kind of media** rotates per post, on the same store-backed counter as
+everything else — `meme-square` (1:1), `meme-portrait` (4:5, taller in a
+phone feed), and `text-only`. Text-only is a real treatment, not a failure: a
+feed where every single entry carries a matching square is its own kind of
+obviously-automated. Set them in `memeGenerator.treatments`.
+
+**Which template** is chosen, not drawn. Each post shape declares a `layouts`
+affinity, so a `terminal-log` post gets a terminal picture and a
+`quote-reaction` gets the quote layout. Affinity is a preference rather than a
+lock — there are only two terminal templates, and a hard rule would make that
+shape alternate between the same pair forever.
+
+Two horizons do two different jobs:
+
+- `templateCooldown` (8) is a **hard bar**. A template used inside it cannot
+  be picked at all, as long as anything else is available.
+- `templateHistory` (40) is how far the picker **looks** when deciding who is
+  most overdue.
+
+They have to be different numbers. With only the cooldown to go on, a template
+unused for thirty posts looks identical to one unused for nine, the ranking
+settles into a fixed orbit, and some templates never come up. Measured: at a
+single horizon of 8 this cycled through ten of the twelve templates forever
+and drew `red-alert` and `paper-white` exactly never. With the split, all
+twelve appear 3–4 times over 40 posts.
+
+**Layout is cooled down as well as template name.** Four of the twelve
+templates are the `classic` shape, so `hot-take` followed by `red-alert` used
+to count as variety while being one picture in different colours.
+
+```bash
+npm run templates:preview     # every template in every size, to data/out/
+```
 
 ### Adding a meme template
 
@@ -344,6 +542,44 @@ it up. Locally you need none of this — your machine already has fonts.
 
 The finished package is about 19 MB zipped, well inside Lambda's 50 MB limit.
 
+### One memory, not two
+
+This is worth understanding before you run anything locally that publishes.
+
+The agent originally kept **two** memories. Local runs wrote `./data/*.json`;
+Lambda wrote DynamoDB. Neither knew the other existed. So when a post was
+published from a laptop with `npm run publish`, the scheduled Lambda never saw
+it: both rotation counters stayed near zero, both runs picked the first
+opening style and a random template from a full pool, and the two posts came
+out looking like the same post. The article dedupe was split the same way, so
+the same story could go out twice.
+
+Three things now stop that:
+
+**The counters are a cache, not the source of truth.** When a rotation counter
+is missing, it is rebuilt by counting the posts that actually used that
+rotation, so a fresh store with history in it carries on instead of starting
+the feed again. Each rotation counts its own posts, because they do not all
+advance once per post — the endings rotation skips shapes that end themselves.
+
+**Publishing live from the JSON store is refused.** `npm run publish` with
+`STORE_DRIVER=json` and `PUBLISHER=linkedin` stops with an explanation rather
+than quietly desyncing. Dry runs and the console provider are unaffected.
+`ALLOW_JSON_STORE_FOR_LIVE_POSTS=true` opts back in.
+
+**There is a migration.** To bring existing local history into the table:
+
+```bash
+npm run store:migrate                 # prints what it would do
+npm run store:migrate -- --confirm    # writes
+```
+
+Articles and posts are copied only if missing, so the live store always wins.
+Rotation counters take the **highest** of the two, never the newest — a
+counter going backwards replays a stretch of the rotation, which is the bug
+this whole thing is about. Everything else takes the most recent value. It is
+safe to run twice.
+
 ### Storage switches to DynamoDB
 
 Lambda's filesystem is thrown away between invocations, so the JSON store
@@ -367,19 +603,40 @@ switch to x86, change **both** or the function will not start.
 npm test
 ```
 
-67 tests over the parts most likely to degrade quietly rather than crash:
+170 tests over the parts most likely to degrade quietly rather than crash:
 
 - **classifier scoring** — that AI stories pass, e-bike stories don't, exclude
   keywords actually bite, and `ai` doesn't match inside `email` or `chair`.
+- **hashtags** — that a tag nothing made relevant is never chosen even when
+  everything relevant is fatigued, that a dominant tag is barred once it
+  passes its share, that a thin story gets a short honest set rather than
+  padding, that no set repeats inside its cooldown over 60 posts, and that the
+  count rotation rebuilds itself from post history.
+- **media selection** — that a template cannot return inside the cooldown, that
+  consecutive posts never share a layout, that every template gets used over a
+  long run, that a shape affinity is honoured but can be overridden, and that
+  text-only produces no image.
+- **store persistence** — that both drivers behave identically, that cooldowns
+  count drafts while analytics does not, that a rotation counter can never go
+  backwards through a migration, that migrating twice is a no-op, and that a
+  store which loses its counters resumes from post history instead of
+  restarting the feed.
 - **dedupe** — that the same URL always produces the same id even with
   tracking params, that saving twice stores once, and that a used article is
   never offered again.
+- **story frames** — that a repeated frame lowers a story's score, that one
+  frame cannot take over the shortlist, that the cap keeps the best of a
+  capped frame rather than a random three, and that a bare announcement is not
+  mistaken for a genuinely good release.
 - **humanizer** — that every banned phrase is stripped, em-dashes are capped,
   contractions keep their capitals, and clean text is left alone.
-- **hook scoring** — that a specific hook beats a vague one and clichés lose.
+- **hook scoring** — that a specific hook beats a vague one, that clichés
+  lose, and that jitter can reach a near-tie but never a genuinely weaker line.
 - **post shapes** — that no two shapes assemble into the same skeleton, that a
-  shape which forbids a closing question never gets one, and that a half-empty
-  model response still produces something postable.
+  shape which forbids a closing question never gets one, that a closer the
+  model volunteers is dropped when the ending is `none`, that no shape can ask
+  for more words than the global ceiling, and that a half-empty model response
+  still produces something postable.
 
 No network and no API key needed for any of them.
 

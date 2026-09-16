@@ -91,10 +91,22 @@ test('scores stay between 0 and 1', () => {
 test('repeating a recent topic lowers the score', () => {
   const story = article({ title: 'OpenAI ships a broken update' });
 
-  const fresh = scoreMemeability(story, rules, []);
-  const repeat = scoreMemeability(story, rules, extractTopics(story, rules.bigNames));
+  const fresh = scoreMemeability(story, rules, {});
+  const repeat = scoreMemeability(story, rules, { topics: extractTopics(story, rules.bigNames) });
 
   assert.ok(repeat.memeScore < fresh.memeScore, 'a repeated topic should score lower');
+});
+
+test('repeating a recent frame lowers the score', () => {
+  // Different company, different words, same kind of story. This is the one
+  // that used to slip through, because dedupe only looked at proper nouns.
+  const story = article({ title: 'Relay shuts down after a broken deploy' });
+
+  const fresh = scoreMemeability(story, rules, {});
+  const repeat = scoreMemeability(story, rules, { frames: ['broke', 'broke'] });
+
+  assert.ok(repeat.memeScore < fresh.memeScore, 'a repeated frame should score lower');
+  assert.ok(repeat.reasons.some((reason) => reason.includes('already did')));
 });
 
 test('topicOverlap reports the share of shared topics', () => {

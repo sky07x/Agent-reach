@@ -30,12 +30,18 @@ export function articleIdFromUrl(url) {
   return crypto.createHash('sha1').update(cleaned).digest('hex').slice(0, 16);
 }
 
-export function createStore(config) {
-  const driverName = config.store.driver === 'dynamo' ? 'dynamo' : 'json';
+/**
+ * @param {object} config
+ * @param {object} [options]
+ * @param {object} [options.driver]  a ready-made driver, so the store's own
+ *   logic can be exercised against an in-memory fake without an AWS account
+ */
+export function createStore(config, { driver } = {}) {
+  const driverName = driver?.name ?? (config.store.driver === 'dynamo' ? 'dynamo' : 'json');
 
   // Built once by init(). The DynamoDB driver is imported only when it is
   // actually used, so local runs and tests never load the AWS SDK.
-  let db = null;
+  let db = driver ?? null;
 
   async function open() {
     if (db) return db;
@@ -130,12 +136,27 @@ export function createStore(config) {
     },
 
     /**
-     * Used by the curator to avoid repeating a topic, and by the meme
-     * generator to avoid repeating a template.
+     * Published posts only. This is what analytics measures, because a draft
+     * has no engagement to learn from.
      */
     async listRecentPublished(limit = 10) {
       const posts = await (await open()).list(COLLECTIONS.posts);
       return posts.filter((post) => post.status === 'published').sort(byNewest).slice(0, limit);
+    },
+
+    /**
+     * Anything we have written, draft or published. This is what the cooldowns
+     * want.
+     *
+     * They used to read listRecentPublished, which meant a dry run never
+     * counted as "used": every dry run re-picked from the full template pool
+     * and you could never see the rotation working while testing it. A failed
+     * post is the same story - we still wrote about it, so it should not come
+     * straight back round.
+     */
+    async listRecentAttempted(limit = 10) {
+      const posts = await (await open()).list(COLLECTIONS.posts);
+      return posts.sort(byNewest).slice(0, limit);
     },
 
     /* --- state ---------------------------------------------------------- */

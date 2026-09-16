@@ -69,3 +69,73 @@ test('pickBestHook copes with no usable candidates', () => {
   assert.deepEqual(pickBestHook([]), { best: '', scored: [] });
   assert.deepEqual(pickBestHook(undefined), { best: '', scored: [] });
 });
+
+/* --- jitter -------------------------------------------------------------- */
+
+// Four candidates that all score the same, which is the normal case: the
+// scorer cannot tell good lines apart, only obviously bad ones.
+const TIED = [
+  'They shipped an agent with shell access.',
+  'The agent got shell access in production.',
+  'Production now has an agent with a shell.',
+  'Shell access, in production, on purpose.',
+];
+
+test('without jitter, only a top scorer can win', () => {
+  const hooks = [...TIED, 'In today\'s fast-paced world, this is a game-changer.'];
+
+  for (let i = 0; i < 20; i += 1) {
+    assert.ok(TIED.includes(pickBestHook(hooks).best), 'a lower scorer must never win');
+  }
+});
+
+test('an exact tie is broken at random even without jitter', () => {
+  // A tie is exactly the case where this scorer has no opinion, so always
+  // taking the first is just shipping whatever the model listed first.
+  assert.equal(pickBestHook(TIED, { random: () => 0.99 }).best, TIED[3]);
+  assert.equal(pickBestHook(TIED, { random: () => 0 }).best, TIED[0]);
+});
+
+test('jitter lets a near-tie win', () => {
+  // random() near 1 picks the last contender rather than the first.
+  const { best, contenders } = pickBestHook(TIED, { jitter: 0.12, random: () => 0.99 });
+
+  assert.equal(contenders, 4, 'all four are within the band');
+  assert.equal(best, TIED[3]);
+});
+
+test('jitter never reaches a hook outside the band', () => {
+  const hooks = [
+    'They shipped an agent with shell access.',
+    'In today\'s fast-paced world, this is a total game-changer for everyone.',
+  ];
+
+  // Even asking for the last contender, the cliche is not one.
+  const { best, contenders } = pickBestHook(hooks, { jitter: 0.12, random: () => 0.99 });
+
+  assert.equal(contenders, 1);
+  assert.equal(best, hooks[0]);
+});
+
+test('the scoreboard marks which hook actually ran', () => {
+  const { best, scored } = pickBestHook(TIED, { jitter: 0.12, random: () => 0.99 });
+
+  const chosen = scored.filter((entry) => entry.chosen);
+
+  assert.equal(chosen.length, 1, 'exactly one hook is marked');
+  assert.equal(chosen[0].hook, best);
+});
+
+test('a random source that returns 1 does not fall off the end', () => {
+  const { best } = pickBestHook(TIED, { jitter: 0.12, random: () => 1 });
+
+  assert.ok(TIED.includes(best), 'should still be a real hook');
+});
+
+test('jitter still respects the character limit', () => {
+  const hooks = ['Short and sharp.', 'x'.repeat(200)];
+
+  const { best } = pickBestHook(hooks, { maxChars: 140, jitter: 0.12, random: () => 0.99 });
+
+  assert.equal(best, hooks[0], 'a truncated hook is never a contender');
+});

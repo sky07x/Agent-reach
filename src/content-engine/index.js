@@ -5,60 +5,50 @@
  * hook ourselves with plain rules, which is cheaper and more consistent than
  * asking the model which of its own lines is best.
  *
- * Two things rotate independently here: the SHAPE of the post (its skeleton,
- * see shapes.js) and the STYLE of its opening line. Six shapes against five
- * styles means the same pairing does not come round again for thirty posts.
+ * Four things rotate independently here: the SHAPE of the post (its skeleton),
+ * the STYLE of its opening line, how it ENDS - including the option of not
+ * ending with anything - and how LONG it runs. Six shapes against five styles
+ * against six endings against four lengths means the same combination is
+ * effectively out of reach. See shapes.js.
  *
  * Cost per post so far: 1 call here, 1 in the humanizer's editor pass.
  */
 
 import { createLogger } from '../lib/logger.js';
+import { createRotation } from '../lib/rotation.js';
 import { SYSTEM_PROMPT, OPENING_STYLES, buildUserPrompt } from './prompts.js';
-import { POST_SHAPES, FALLBACK_SHAPE, getShape, normalizeParts, assemblePost } from './shapes.js';
+import {
+  POST_SHAPES,
+  CLOSER_STYLES,
+  LENGTH_MOODS,
+  FALLBACK_SHAPE,
+  getShape,
+  normalizeParts,
+  assemblePost,
+  getCloserStyle,
+  targetWords,
+} from './shapes.js';
 import { pickBestHook } from './hook-scorer.js';
+import { chooseHashtags, tagsForFrame } from './hashtags.js';
 
 const log = createLogger('content-engine');
 
-/** Keep hashtags inside the configured shape and drop the banned generic ones. */
-function cleanHashtags(hashtags, rules) {
-  const banned = new Set(rules.banned.map((tag) => tag.toLowerCase()));
-
-  const cleaned = (hashtags ?? [])
-    .map((tag) => String(tag).trim())
-    .map((tag) => (tag.startsWith('#') ? tag : `#${tag}`))
-    .filter((tag) => /^#[A-Za-z][A-Za-z0-9]*$/.test(tag))
-    .filter((tag) => !banned.has(tag.toLowerCase()));
-
-  const unique = [...new Map(cleaned.map((tag) => [tag.toLowerCase(), tag])).values()];
-
-  // Top up from the preferred list if the model was stingy.
-  for (const tag of rules.preferred) {
-    if (unique.length >= rules.min) break;
-    if (!unique.some((existing) => existing.toLowerCase() === tag.toLowerCase())) unique.push(tag);
-  }
-
-  return unique.slice(0, rules.max);
+/** Words in the post itself. Hashtags are not prose and do not count. */
+export function countWords(text) {
+  return text
+    .split(/\s+/)
+    .filter((word) => word && !word.startsWith('#'))
+    .length;
 }
 
 export function createContentEngine({ config, llm, store }) {
   const settings = config.content;
 
-  /**
-   * Walk a list one step per post and remember where we got to.
-   *
-   * The counter lives in the store rather than in memory because every run is
-   * a fresh process. If the store is empty the counter restarts at zero,
-   * which is exactly how two consecutive posts ended up identical.
-   */
-  async function rotate(stateKey, names, known) {
-    const usable = names.filter((name) => known[name]);
-    if (!usable.length) return null;
+  // Shared with the media picker, so both recover the same way when a store
+  // turns up without its counters. See lib/rotation.js.
+  const rotation = createRotation({ store });
 
-    const index = Number(await store.getState(stateKey, 0));
-    await store.setState(stateKey, index + 1);
-
-    return usable[index % usable.length];
-  }
+  const rotate = (key, names, known, seed) => rotation.next({ key, names, known, seed });
 
   async function getLearnings() {
     const learnings = await store.getState('learnings', null);
@@ -72,8 +62,35 @@ export function createContentEngine({ config, llm, store }) {
      * @returns draft with the copy, the chosen hook, and the meme text
      */
     async generate(article) {
-      const shapeName = (await rotate('shapeRotationIndex', settings.postShapes, POST_SHAPES)) ?? FALLBACK_SHAPE;
-      const style = (await rotate('styleRotationIndex', settings.openingStyles, OPENING_STYLES)) ?? 'blunt-claim';
+      // Each rotation says how to rebuild its own counter from post history,
+      // because they do not all advance once per post.
+      const shapeName = (await rotate(
+        'shapeRotationIndex', settings.postShapes, POST_SHAPES,
+        (posts) => posts.filter((post) => post.shape).length,
+      )) ?? FALLBACK_SHAPE;
+
+      const style = (await rotate(
+        'styleRotationIndex', settings.openingStyles, OPENING_STYLES,
+        (posts) => posts.filter((post) => post.openingStyle).length,
+      )) ?? 'blunt-claim';
+
+      const shape = getShape(shapeName);
+
+      // Shapes that end themselves do not consume a turn of the ending
+      // rotation, so the endings stay evenly spread over the posts that
+      // actually use one. That is also why this one counts posts that have a
+      // closerStyle rather than posts in general.
+      const closerStyle = shape.closer === 'rotate'
+        ? (await rotate(
+          'closerRotationIndex', settings.closerStyles, CLOSER_STYLES,
+          (posts) => posts.filter((post) => post.closerStyle).length,
+        )) ?? 'argument-bait'
+        : null;
+
+      const lengthMood = (await rotate(
+        'lengthRotationIndex', settings.lengthMoods, LENGTH_MOODS,
+        (posts) => posts.filter((post) => post.lengthMood).length,
+      )) ?? 'mid';
 
       const result = await llm.chatJson({
         label: 'write-post',
@@ -84,52 +101,109 @@ export function createContentEngine({ config, llm, store }) {
           article,
           shape: shapeName,
           style,
+          closerStyle,
+          lengthMood,
+          maxWords: settings.maxWords,
           hookCount: settings.hookCandidates,
           hashtagRules: {
             min: settings.hashtagCount.min,
             max: settings.hashtagCount.max,
-            preferred: settings.preferredHashtags,
+            preferred: tagsForFrame(article.curation?.frame),
             banned: settings.bannedHashtags,
           },
           learnings: await getLearnings(),
         }),
       });
 
-      const { best, scored } = pickBestHook(result.hooks, settings.hookMaxChars);
+      const { best, scored, contenders } = pickBestHook(result.hooks, {
+        maxChars: settings.hookMaxChars,
+        jitter: settings.hookJitter,
+      });
 
       if (!best) throw new Error('The model returned no usable hook');
 
-      const hashtags = cleanHashtags(result.hashtags, {
-        min: settings.hashtagCount.min,
-        max: settings.hashtagCount.max,
-        preferred: settings.preferredHashtags,
-        banned: settings.bannedHashtags,
+      // How many tags this post gets is itself rotated: twelve of the first
+      // thirteen posts carried exactly three, which is its own small tell.
+      const hashtagCount = Number(await rotate(
+        'hashtagCountRotationIndex',
+        settings.hashtagCounts.map(String),
+        null,
+        (posts) => posts.filter((post) => post.hashtags?.length).length,
+      ) ?? settings.hashtagCount.min);
+
+      const recent = await store.listRecentAttempted(settings.hashtagHistory);
+
+      const hashtagPick = chooseHashtags({
+        modelTags: result.hashtags,
+        frame: article.curation?.frame,
+        // The story in its own words decides the subject. The frame only
+        // describes its shape, which is a different thing entirely.
+        text: `${article.title} ${article.summary ?? ""}`,
+        recentSets: recent.map((post) => post.hashtags ?? []),
+        previousSet: recent[0]?.hashtags ?? [],
+        count: hashtagCount,
+        rules: {
+          min: settings.hashtagCount.min,
+          banned: settings.bannedHashtags,
+          cooldown: settings.hashtagCooldown,
+          maxShare: settings.hashtagMaxShare,
+          setCooldown: settings.hashtagSetCooldown,
+        },
       });
 
-      const parts = normalizeParts(getShape(shapeName), result);
+      const hashtags = hashtagPick.tags;
+
+      const parts = normalizeParts(shape, result, closerStyle);
+      const length = targetWords(shape, lengthMood, settings.maxWords);
+      const text = assemblePost({ shapeName, hook: best, parts, hashtags });
+      const words = countWords(text);
 
       const draft = {
         hook: best,
         shape: shapeName,
         parts,
         hashtags,
-        text: assemblePost({ shapeName, hook: best, parts, hashtags }),
+        text,
+        words,
+        lengthMood,
+        targetWords: length.target,
         meme: {
           topText: String(result.memeTopText ?? '').trim(),
           bottomText: String(result.memeBottomText ?? '').trim(),
           format: String(result.memeFormat ?? article.curation?.memeFormat ?? '').trim(),
         },
         openingStyle: style,
-        shapeInstruction: getShape(shapeName).instruction,
+        closerStyle,
+        // What the humanizer's editor pass is told to respect, so it tightens
+        // the prose instead of quietly restoring the closing question.
+        shapeInstruction: [
+          shape.instruction,
+          closerStyle ? getCloserStyle(closerStyle).instruction : '',
+          `Length: about ${length.target} words. Do not pad it back out.`,
+        ].filter(Boolean).join('\n'),
         hookScoreboard: scored,
+        hashtagReasons: hashtagPick.chosen,
       };
+
+      // Not enforced by trimming: cutting a post to a word count mid-sentence
+      // does more damage than the overrun does. Worth knowing about, though,
+      // because a shape that always overshoots has a prompt that needs work.
+      if (words > length.max) {
+        log.warn('Post ran long', { shape: shapeName, words, ceiling: length.max });
+      }
 
       log.info('Draft written', {
         title: article.title,
         shape: shapeName,
         style,
-        hookScore: scored[0]?.score,
-        words: draft.text.split(/\s+/).length,
+        closerStyle,
+        lengthMood,
+        words,
+        target: length.target,
+        hookScore: scored.find((entry) => entry.chosen)?.score,
+        hookContenders: contenders,
+        hashtags: hashtags.join(" "),
+        hashtagsRelaxed: hashtagPick.relaxed,
       });
 
       return draft;

@@ -85,6 +85,10 @@ export function createAnalytics({ store, publisher }) {
       const worst = scored.slice(-2);
 
       const byShape = averageBy(posts, 'shape');
+      const byFrame = averageBy(posts, 'frame');
+      const byMedia = averageBy(posts, 'mediaTreatment');
+      const byCloser = averageBy(posts, 'closerStyle');
+      const byLength = averageBy(posts, 'lengthMood');
       const byStyle = averageBy(posts, 'openingStyle');
       const byTemplate = averageBy(posts, 'memeTemplate');
 
@@ -94,8 +98,24 @@ export function createAnalytics({ store, publisher }) {
         lines.push(`Post shapes that land: ${byShape.slice(0, 2).map((entry) => entry.key).join(', ')}. Weakest: ${byShape.at(-1).key}.`);
       }
 
+      if (byFrame.length > 1) {
+        lines.push(`Story frames that land: ${byFrame.slice(0, 2).map((entry) => entry.key).join(', ')}. Weakest: ${byFrame.at(-1).key}.`);
+      }
+
+      if (byCloser.length > 1) {
+        lines.push(`Endings that land: ${byCloser.slice(0, 2).map((entry) => entry.key).join(', ')}. Weakest: ${byCloser.at(-1).key}.`);
+      }
+
+      if (byLength.length > 1) {
+        lines.push(`Lengths that land: ${byLength[0].key} posts do best, ${byLength.at(-1).key} worst.`);
+      }
+
       if (byStyle.length > 1) {
         lines.push(`Opening styles that land: ${byStyle.slice(0, 2).map((entry) => entry.key).join(', ')}. Weakest: ${byStyle.at(-1).key}.`);
+      }
+
+      if (byMedia.length > 1) {
+        lines.push(`Media that lands: ${byMedia[0].key} does best, ${byMedia.at(-1).key} worst.`);
       }
 
       if (byTemplate.length > 1) {
