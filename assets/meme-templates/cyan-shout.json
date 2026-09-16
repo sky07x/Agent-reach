@@ -1,0 +1,8 @@
+{
+  "name": "cyan-shout",
+  "layout": "classic",
+  "background": { "type": "gradient", "from": "#0f172a", "to": "#020617" },
+  "accent": "#22d3ee",
+  "textColor": "#f8fafc",
+  "outline": "#020617"
+}

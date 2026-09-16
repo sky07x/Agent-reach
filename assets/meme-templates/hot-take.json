@@ -1,0 +1,8 @@
+{
+  "name": "hot-take",
+  "layout": "classic",
+  "background": { "type": "gradient", "from": "#3b0764", "to": "#1e1b4b" },
+  "accent": "#f472b6",
+  "textColor": "#fdf4ff",
+  "outline": "#1e1b4b"
+}

@@ -1,0 +1,8 @@
+{
+  "name": "grep-output",
+  "layout": "terminal",
+  "background": { "type": "solid", "color": "#0d1117" },
+  "accent": "#58a6ff",
+  "textColor": "#c9d1d9",
+  "outline": null
+}

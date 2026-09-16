@@ -1,0 +1,8 @@
+{
+  "name": "midnight-terminal",
+  "layout": "terminal",
+  "background": { "type": "gradient", "from": "#0b1020", "to": "#161d33" },
+  "accent": "#4ade80",
+  "textColor": "#e6edf3",
+  "outline": null
+}

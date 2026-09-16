@@ -1,0 +1,203 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  linkedin-tech-meme-agent on AWS Lambda.
+
+  Three pieces:
+    a DynamoDB table   the agent's memory (dedupe, post history, learnings)
+    a scheduled Lambda EventBridge fires it 3x a week, it makes one post
+    an admin Lambda    the Express admin API behind a Function URL
+
+  Deployed as a plain zip. Run infra/scripts/build.sh first to produce the
+  build/ directory this template points at, then infra/scripts/deploy.sh.
+
+
+Parameters:
+  AppName:
+    Type: String
+    Default: linkedin-tech-meme-agent
+
+  ScheduleExpression:
+    Type: String
+    # EventBridge cron is always UTC and needs a "?" in one of the day fields.
+    # 04:00 UTC = 09:30 IST. Tue, Wed, Thu.
+    Default: 'cron(0 4 ? * TUE,WED,THU *)'
+    Description: When posts go out, in UTC.
+
+  DryRun:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Leave this true until you have reviewed real generated posts.
+
+  Publisher:
+    Type: String
+    Default: console
+    AllowedValues: [console, linkedin]
+
+  LlmModel:
+    Type: String
+    Default: gpt-4o-mini
+
+  OpenAiApiKey:
+    Type: String
+    NoEcho: true
+
+  LinkedInAccessToken:
+    Type: String
+    NoEcho: true
+    Default: ''
+
+  LinkedInMemberId:
+    Type: String
+    Default: ''
+
+  AdminApiKey:
+    Type: String
+    NoEcho: true
+    Description: Bearer token for the admin API. Make it long and random.
+
+  ReservedConcurrency:
+    Type: Number
+    Default: 0
+    Description: >
+      Set to 1 to stop two runs overlapping. Leave at 0 on a new AWS account:
+      the default account limit is 10, and reserving any of it is refused
+      because it would push the unreserved pool below 10. Double-posting is
+      already prevented by MaximumRetryAttempts 0 plus the article dedupe.
+
+Conditions:
+  ReserveConcurrency: !Not [!Equals [!Ref ReservedConcurrency, 0]]
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    # build.sh installs the linux/arm64 sharp binary, so these must agree.
+    # Changing one without the other gives a runtime "invalid ELF header".
+    Architectures: [arm64]
+    CodeUri: build/
+    MemorySize: 1024      # sharp wants headroom, and more memory is also faster
+    Timeout: 300          # a full cycle is a handful of HTTP calls
+    Environment:
+      Variables:
+        LOG_FORMAT: json
+        STORE_DRIVER: dynamo
+        DYNAMO_TABLE: !Ref AppTable
+        # Lambda ships no fonts. This points fontconfig at the ones build.sh
+        # bundled; without it sharp draws the memes with no text on them.
+        FONTCONFIG_PATH: /var/task/assets/fonts
+        LLM_PROVIDER: openai
+        LLM_MODEL: !Ref LlmModel
+        OPENAI_API_KEY: !Ref OpenAiApiKey
+        PUBLISHER: !Ref Publisher
+        LINKEDIN_ACCESS_TOKEN: !Ref LinkedInAccessToken
+        LINKEDIN_MEMBER_ID: !Ref LinkedInMemberId
+        ADMIN_API_KEY: !Ref AdminApiKey
+        DRY_RUN: !Ref DryRun
+
+Resources:
+  # The agent's memory. Single table, pk = collection, sk = item id.
+  # On-demand billing: at roughly a few hundred small writes a month this
+  # stays inside the free tier and needs no capacity planning.
+  AppTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref AppName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  # Fires on the schedule and runs one full cycle.
+  ScheduledFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AppName}-scheduled'
+      Handler: src/lambda.scheduled
+      # Off by default, see the ReservedConcurrency parameter.
+      ReservedConcurrentExecutions: !If
+        - ReserveConcurrency
+        - !Ref ReservedConcurrency
+        - !Ref AWS::NoValue
+      # This is the setting that actually matters for not posting twice.
+      # Lambda retries a failed async invocation twice by default. If a run
+      # published and then failed on a later step, those retries would each
+      # publish again. Zero retries means a failed run just fails.
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AppTable
+      Events:
+        PostSchedule:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref ScheduleExpression
+            Name: !Sub '${AppName}-post-schedule'
+            Description: Publishes one post per firing.
+
+  # The Express admin API, for checking on the agent without a redeploy.
+  AdminFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AppName}-admin'
+      Handler: src/lambda.api
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AppTable
+      FunctionUrlConfig:
+        # The app checks the bearer token itself. Everything except /health
+        # returns 401 without it.
+        AuthType: NONE
+
+  # Keep logs for a month rather than forever.
+  ScheduledLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AppName}-scheduled'
+      RetentionInDays: 30
+
+  AdminLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AppName}-admin'
+      RetentionInDays: 30
+
+  # Tells you when a scheduled run failed, so a silent week is not a surprise.
+  ScheduledErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AppName}-scheduled-errors'
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ScheduledFunction
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  AdminUrl:
+    Description: Admin API base URL. Add /health to check it is alive.
+    Value: !GetAtt AdminFunctionUrl.FunctionUrl
+
+  TableName:
+    Value: !Ref AppTable
+
+  ScheduledFunctionName:
+    Description: Invoke this by hand to test a real run.
+    Value: !Ref ScheduledFunction

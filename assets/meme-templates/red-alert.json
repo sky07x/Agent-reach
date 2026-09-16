@@ -1,0 +1,8 @@
+{
+  "name": "red-alert",
+  "layout": "classic",
+  "background": { "type": "gradient", "from": "#450a0a", "to": "#180505" },
+  "accent": "#f87171",
+  "textColor": "#fef2f2",
+  "outline": "#180505"
+}

@@ -1,0 +1,8 @@
+{
+  "name": "before-after",
+  "layout": "two-panel",
+  "background": { "type": "gradient", "from": "#111827", "to": "#0b1020" },
+  "accent": "#fbbf24",
+  "textColor": "#f9fafb",
+  "outline": null
+}

@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.local
+
+# Local cache, store and generated posts.
+data/
+
+# Lambda build output and the fonts it downloads (see infra/scripts/).
+infra/build/
+assets/fonts/*.ttf
+
+.DS_Store
+npm-debug.log*

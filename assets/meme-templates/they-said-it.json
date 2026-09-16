@@ -1,0 +1,8 @@
+{
+  "name": "they-said-it",
+  "layout": "quote",
+  "background": { "type": "gradient", "from": "#1c1917", "to": "#0c0a09" },
+  "accent": "#f59e0b",
+  "textColor": "#fafaf9",
+  "outline": null
+}

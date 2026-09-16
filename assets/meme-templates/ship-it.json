@@ -1,0 +1,8 @@
+{
+  "name": "ship-it",
+  "layout": "two-panel",
+  "background": { "type": "solid", "color": "#052e2b" },
+  "accent": "#2dd4bf",
+  "textColor": "#ecfdf5",
+  "outline": null
+}

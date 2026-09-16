@@ -1,0 +1,31 @@
+{
+  "name": "linkedin-tech-meme-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Reads TechCrunch AI/CS stories, decides which are worth posting, writes them in a Fireship-ish voice, renders a meme, and publishes to LinkedIn 3x a week.",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env src/server.js",
+    "start": "node src/server.js",
+    "run:once": "node --env-file-if-exists=.env src/cli.js run",
+    "publish": "node --env-file-if-exists=.env src/cli.js publish",
+    "dry-run": "node --env-file-if-exists=.env src/cli.js run --dry-run",
+    "linkedin:auth": "node --env-file-if-exists=.env src/linkedin-auth.js",
+    "templates:preview": "node --env-file-if-exists=.env src/cli.js preview-templates",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.700.0",
+    "@aws-sdk/lib-dynamodb": "^3.700.0",
+    "cheerio": "^1.0.0",
+    "express": "^4.21.2",
+    "node-cron": "^4.6.0",
+    "openai": "^4.77.0",
+    "serverless-http": "^3.2.0",
+    "sharp": "^0.35.4"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

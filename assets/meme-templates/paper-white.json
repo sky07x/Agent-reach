@@ -1,0 +1,8 @@
+{
+  "name": "paper-white",
+  "layout": "classic",
+  "background": { "type": "gradient", "from": "#fafaf9", "to": "#e7e5e4" },
+  "accent": "#dc2626",
+  "textColor": "#1c1917",
+  "outline": null
+}

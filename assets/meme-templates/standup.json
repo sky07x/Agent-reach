@@ -1,0 +1,9 @@
+{
+  "name": "standup",
+  "layout": "chat",
+  "background": { "type": "gradient", "from": "#18181b", "to": "#09090b" },
+  "accent": "#a3e635",
+  "textColor": "#fafafa",
+  "replyTextColor": "#0b0f19",
+  "outline": null
+}

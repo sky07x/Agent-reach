@@ -1,0 +1,9 @@
+{
+  "name": "pm-vs-eng",
+  "layout": "chat",
+  "background": { "type": "gradient", "from": "#431407", "to": "#1c0a03" },
+  "accent": "#fb923c",
+  "textColor": "#fff7ed",
+  "replyTextColor": "#1c0a03",
+  "outline": null
+}
