@@ -46,8 +46,14 @@ const EDITOR_PROMPT = `You are an editor. You get a LinkedIn post that was
 written by a language model and your job is to make it read like a human
 developer typed it.
 
-Keep: the meaning, the facts, the numbers, the hashtags, the closing question.
+Keep: the meaning, the facts, the numbers, the hashtags.
 Keep it roughly the same length or shorter.
+
+Keep the structure exactly as you find it. The line breaks and the number of
+paragraphs were chosen deliberately, and posts are built to different shapes
+on purpose. Never merge lines into a paragraph, never split a paragraph up,
+and never reflow a block of log or terminal output into prose. If the post
+does not end with a question, it is not supposed to, so do not add one.
 
 Change:
 - Break up any rhythm where every sentence is the same length. Mix a long one
@@ -69,9 +75,13 @@ export function createHumanizer({ config, llm }) {
      * Clean up one post.
      *
      * @param {string} text
+     * @param {object} [options]
+     * @param {string} [options.shapeNote]  what shape the post was written to,
+     *   so the editor tightens the prose instead of quietly rewriting a
+     *   two-line zinger back into the usual four-paragraph post
      * @returns {Promise<{text: string, report: object}>}
      */
-    async humanize(text) {
+    async humanize(text, { shapeNote = '' } = {}) {
       // Hashtags are held aside for the whole process and reattached at the
       // end, so no pass can lose them.
       const { prose, hashtagLine } = splitOffHashtags(text);
@@ -96,14 +106,18 @@ export function createHumanizer({ config, llm }) {
           .map((issue) => `- ${issue.type}: ${issue.detail} (${issue.reason})`)
           .join('\n');
 
+        const brief = [
+          shapeNote ? `This post was written to a set shape. Respect it:\n${shapeNote}` : '',
+          problems ? `Known problems to fix:\n${problems}` : '',
+          `Post:\n${firstPass.text}`,
+        ].filter(Boolean).join('\n\n');
+
         edited = await llm.chat({
           label: 'humanize-edit',
           temperature: 0.85,
           maxTokens: 600,
           system: EDITOR_PROMPT,
-          user: problems
-            ? `Known problems to fix:\n${problems}\n\nPost:\n${firstPass.text}`
-            : `Post:\n${firstPass.text}`,
+          user: brief,
         });
       } catch (error) {
         // The rules already did real work, so a failed editor pass is not fatal.

@@ -84,10 +84,15 @@ export function createAnalytics({ store, publisher }) {
       const best = scored.slice(0, 3);
       const worst = scored.slice(-2);
 
+      const byShape = averageBy(posts, 'shape');
       const byStyle = averageBy(posts, 'openingStyle');
       const byTemplate = averageBy(posts, 'memeTemplate');
 
       const lines = [];
+
+      if (byShape.length > 1) {
+        lines.push(`Post shapes that land: ${byShape.slice(0, 2).map((entry) => entry.key).join(', ')}. Weakest: ${byShape.at(-1).key}.`);
+      }
 
       if (byStyle.length > 1) {
         lines.push(`Opening styles that land: ${byStyle.slice(0, 2).map((entry) => entry.key).join(', ')}. Weakest: ${byStyle.at(-1).key}.`);
@@ -100,7 +105,7 @@ export function createAnalytics({ store, publisher }) {
       lines.push(`Best performing hooks recently:\n${best.map((post) => `  "${post.hook}"`).join('\n')}`);
 
       if (worst.length) {
-        lines.push(`Weakest recently (avoid this shape):\n${worst.map((post) => `  "${post.hook}"`).join('\n')}`);
+        lines.push(`Weakest recently (avoid lines like these):\n${worst.map((post) => `  "${post.hook}"`).join('\n')}`);
       }
 
       const topTopics = [...new Set(best.flatMap((post) => post.topics ?? []))].slice(0, 5);

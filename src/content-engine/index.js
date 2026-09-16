@@ -5,11 +5,16 @@
  * hook ourselves with plain rules, which is cheaper and more consistent than
  * asking the model which of its own lines is best.
  *
+ * Two things rotate independently here: the SHAPE of the post (its skeleton,
+ * see shapes.js) and the STYLE of its opening line. Six shapes against five
+ * styles means the same pairing does not come round again for thirty posts.
+ *
  * Cost per post so far: 1 call here, 1 in the humanizer's editor pass.
  */
 
 import { createLogger } from '../lib/logger.js';
 import { SYSTEM_PROMPT, OPENING_STYLES, buildUserPrompt } from './prompts.js';
+import { POST_SHAPES, FALLBACK_SHAPE, getShape, normalizeParts, assemblePost } from './shapes.js';
 import { pickBestHook } from './hook-scorer.js';
 
 const log = createLogger('content-engine');
@@ -35,28 +40,24 @@ function cleanHashtags(hashtags, rules) {
   return unique.slice(0, rules.max);
 }
 
-/** Glue the parts into the text that actually goes on LinkedIn. */
-export function assemblePost({ hook, body, question, hashtags }) {
-  return [hook, '', body.trim(), '', question.trim(), '', hashtags.join(' ')]
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
 export function createContentEngine({ config, llm, store }) {
   const settings = config.content;
 
   /**
-   * Rotate the opening style by how many posts we have made, so consecutive
-   * posts never share a shape.
+   * Walk a list one step per post and remember where we got to.
+   *
+   * The counter lives in the store rather than in memory because every run is
+   * a fresh process. If the store is empty the counter restarts at zero,
+   * which is exactly how two consecutive posts ended up identical.
    */
-  async function nextOpeningStyle() {
-    const index = Number(await store.getState('styleRotationIndex', 0));
-    const styles = settings.openingStyles.filter((style) => OPENING_STYLES[style]);
-    const style = styles[index % styles.length];
+  async function rotate(stateKey, names, known) {
+    const usable = names.filter((name) => known[name]);
+    if (!usable.length) return null;
 
-    await store.setState('styleRotationIndex', index + 1);
-    return style;
+    const index = Number(await store.getState(stateKey, 0));
+    await store.setState(stateKey, index + 1);
+
+    return usable[index % usable.length];
   }
 
   async function getLearnings() {
@@ -71,7 +72,8 @@ export function createContentEngine({ config, llm, store }) {
      * @returns draft with the copy, the chosen hook, and the meme text
      */
     async generate(article) {
-      const style = await nextOpeningStyle();
+      const shapeName = (await rotate('shapeRotationIndex', settings.postShapes, POST_SHAPES)) ?? FALLBACK_SHAPE;
+      const style = (await rotate('styleRotationIndex', settings.openingStyles, OPENING_STYLES)) ?? 'blunt-claim';
 
       const result = await llm.chatJson({
         label: 'write-post',
@@ -80,6 +82,7 @@ export function createContentEngine({ config, llm, store }) {
         system: SYSTEM_PROMPT,
         user: buildUserPrompt({
           article,
+          shape: shapeName,
           style,
           hookCount: settings.hookCandidates,
           hashtagRules: {
@@ -103,28 +106,27 @@ export function createContentEngine({ config, llm, store }) {
         banned: settings.bannedHashtags,
       });
 
+      const parts = normalizeParts(getShape(shapeName), result);
+
       const draft = {
         hook: best,
-        body: String(result.body ?? '').trim(),
-        question: String(result.question ?? '').trim(),
+        shape: shapeName,
+        parts,
         hashtags,
-        text: assemblePost({
-          hook: best,
-          body: String(result.body ?? ''),
-          question: String(result.question ?? ''),
-          hashtags,
-        }),
+        text: assemblePost({ shapeName, hook: best, parts, hashtags }),
         meme: {
           topText: String(result.memeTopText ?? '').trim(),
           bottomText: String(result.memeBottomText ?? '').trim(),
           format: String(result.memeFormat ?? article.curation?.memeFormat ?? '').trim(),
         },
         openingStyle: style,
+        shapeInstruction: getShape(shapeName).instruction,
         hookScoreboard: scored,
       };
 
       log.info('Draft written', {
         title: article.title,
+        shape: shapeName,
         style,
         hookScore: scored[0]?.score,
         words: draft.text.split(/\s+/).length,
@@ -135,5 +137,5 @@ export function createContentEngine({ config, llm, store }) {
   };
 }
 
-export { pickBestHook, assemblePost as _assemblePost };
+export { pickBestHook, assemblePost };
 export default { createContentEngine };

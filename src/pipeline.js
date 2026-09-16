@@ -73,7 +73,7 @@ export function createPipeline(agent) {
   /** Turn one curated article into a finished, humanized, illustrated post. */
   async function buildPost(article) {
     const draft = await contentEngine.generate(article);
-    const humanized = await humanizer.humanize(draft.text);
+    const humanized = await humanizer.humanize(draft.text, { shapeNote: draft.shapeInstruction });
 
     const postId = newPostId();
 
@@ -98,6 +98,7 @@ export function createPipeline(agent) {
       text: humanized.text,
       hook: draft.hook,
       hashtags: draft.hashtags,
+      shape: draft.shape,
       openingStyle: draft.openingStyle,
       topics: article.topics ?? [],
       memeTemplate: template,

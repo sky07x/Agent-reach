@@ -28,7 +28,7 @@ Then:
 
 ```bash
 npm run dev                   # admin API on :3001 + cron scheduler
-npm test                      # 42 tests, no network needed
+npm test                      # 67 tests, no network needed
 npm run templates:preview     # render every meme template to data/out/
 npm run linkedin:auth         # one-time LinkedIn OAuth, writes .env for you
 ```
@@ -42,7 +42,7 @@ npm run linkedin:auth         # one-time LinkedIn OAuth, writes .env for you
 | 1. Scrape | `src/scraper/` | TechCrunch RSS, falls back to HTML for the full body. Caches responses, respects robots.txt. | 0 |
 | 2. Classify | `src/classifier/` | Keyword scoring decides most articles for free. Only the grey zone goes to the model. | ~0.3 per article |
 | 3. Curate | `src/curator/` | Scores "meme-ability", shortlists 8, then one call ranks them and gives each pick an angle. | 1 per run |
-| 4. Write | `src/content-engine/` | One call returns 4 hooks and a body. We pick the hook with plain rules. | 1 per post |
+| 4. Write | `src/content-engine/` | One call returns 4 hooks and the post. Each post is written to a different shape, and we pick the hook with plain rules. | 1 per post |
 | 5. Humanize | `src/humanizer/` | Strips AI tells mechanically, then one editor pass, then strips again. | 1 per post |
 | 6. Meme | `src/meme-generator/` | Draws the image locally with sharp. | 0 |
 | 7. Publish | `src/publisher/` | LinkedIn API, or the console provider which saves to disk. | 0 |
@@ -217,6 +217,39 @@ No code changes. To add a third provider, add one function to
 take `{system, user, model, temperature, maxTokens, json}` and return
 `{text, inputTokens, outputTokens}`.
 
+### Adding a post shape
+
+A shape is the skeleton of a post: what we ask the model for, and how the
+pieces are glued back together. Six ship with the agent (`classic-take`,
+`two-line-zinger`, `slow-burn-rant`, `terminal-log`, `quote-reaction`,
+`receipts`) and one is used per post, in rotation.
+
+This matters more than the wording does. Rotating only the opening line while
+every post kept the same hook / body / question / hashtags frame is what made
+the feed look like one template with the nouns swapped out.
+
+Add one entry to `POST_SHAPES` in
+[src/content-engine/shapes.js](src/content-engine/shapes.js):
+
+```js
+'my-shape': {
+  instruction: 'What the model should write, in plain words.',
+  fields: [
+    { key: 'punchline', type: 'string', description: 'what this field is' },
+    { key: 'beats', type: 'string[]', description: 'a list of lines' },
+  ],
+  assemble: ({ hook, parts, hashtags }) => /* return the finished text */,
+}
+```
+
+Then add its name to `content.postShapes` in
+[src/config/index.js](src/config/index.js). The fields you declare are what
+the model is asked for, so nothing else needs to change. Set `overrideHook` if
+the shape needs to own its own first line, the way `quote-reaction` does.
+
+The shape rotation (six) and the opening-style rotation (five) advance
+separately, so the same pairing does not come round again for thirty posts.
+
 ### Adding a meme template
 
 Drop a JSON file into [assets/meme-templates/](assets/meme-templates/):
@@ -243,7 +276,7 @@ The generator will not reuse a template until 8 posts have gone out
 (`memeGenerator.templateCooldown`), so more templates means less visual
 repetition. Twelve ship with the agent.
 
-To add a whole new *shape* rather than a new colourway, add a function to
+To add a whole new *layout* rather than a new colourway, add a function to
 `LAYOUTS` in `layouts.js`. It receives `{template, width, height, topText,
 bottomText}` and returns an SVG fragment.
 
@@ -334,8 +367,7 @@ switch to x86, change **both** or the function will not start.
 npm test
 ```
 
-42 tests over the three parts most likely to degrade quietly rather than
-crash:
+67 tests over the parts most likely to degrade quietly rather than crash:
 
 - **classifier scoring** — that AI stories pass, e-bike stories don't, exclude
   keywords actually bite, and `ai` doesn't match inside `email` or `chair`.
@@ -345,6 +377,9 @@ crash:
 - **humanizer** — that every banned phrase is stripped, em-dashes are capped,
   contractions keep their capitals, and clean text is left alone.
 - **hook scoring** — that a specific hook beats a vague one and clichés lose.
+- **post shapes** — that no two shapes assemble into the same skeleton, that a
+  shape which forbids a closing question never gets one, and that a half-empty
+  model response still produces something postable.
 
 No network and no API key needed for any of them.
 
@@ -357,7 +392,8 @@ src/
   scraper/          RSS + HTML, caching, robots.txt
   classifier/       heuristics.js is the free scoring, index.js escalates
   curator/          meme-score.js is the shortlist, index.js does the ranking
-  content-engine/   prompts.js is the voice, hook-scorer.js picks the opener
+  content-engine/   shapes.js is the skeleton, prompts.js is the voice,
+                    hook-scorer.js picks the opener
   humanizer/        banned-phrases.js is the list, rules.js does the work
   meme-generator/   layouts.js draws, text.js wraps, index.js picks templates
   scheduler/        node-cron locally, unused on Lambda

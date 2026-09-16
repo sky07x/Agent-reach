@@ -6,10 +6,15 @@
  * trying to avoid.
  */
 
+import { getShape } from './shapes.js';
+
 /**
  * Each opening style is a different way to start a post. We rotate through
- * them so two posts in a row never share the same shape - that sameness is
- * the loudest tell that a feed is automated.
+ * them so two posts in a row never share the same first move.
+ *
+ * Styles only control line one. The shape of the whole post lives in
+ * shapes.js and rotates separately - varying the opener while every post kept
+ * the same skeleton was what made the feed look stamped out.
  */
 export const OPENING_STYLES = {
   'blunt-claim': {
@@ -34,7 +39,7 @@ export const OPENING_STYLES = {
   },
 };
 
-/** The rules that apply to every post, whatever the opening style. */
+/** The rules that apply to every post, whatever the shape or opening style. */
 export const SYSTEM_PROMPT = `You write LinkedIn posts for a developer audience.
 Think Fireship (the YouTube channel): fast, technically literate, sarcastic,
 allergic to filler. Meme-page bluntness with real engineering knowledge behind it.
@@ -47,8 +52,9 @@ HARD RULES
 - Include at least one concrete detail from the article: a number, a product
   name, a version, a direct quote. Vague posts read as filler.
 - Take a position. You are not summarising the news, you are reacting to it.
-- End with a real question or a take people will want to argue with. Not
-  "What do you think?" - something specific and slightly provocative.
+- The SHAPE you are given decides how the post is built and how it ends.
+  Follow it exactly. If the shape says no closing question, there is no
+  closing question.
 - 3 to 5 hashtags, specific and niche.
 
 NEVER DO THIS
@@ -65,6 +71,19 @@ Write the way a senior engineer types on their phone between meetings. Some
 sentences are fragments. Contractions everywhere. Occasional lowercase for
 emphasis. Confident, a bit tired, genuinely knows the subject.`;
 
+/** Render one shape's fields as the JSON keys we want back. */
+function fieldSchema(shape) {
+  return shape.fields
+    .map((field) => {
+      const value = field.type === 'string[]'
+        ? `["${field.description}"]`
+        : `"${field.description}"`;
+
+      return `  "${field.key}": ${value}`;
+    })
+    .join(',\n');
+}
+
 /**
  * Build the per-story prompt.
  *
@@ -72,8 +91,15 @@ emphasis. Confident, a bit tired, genuinely knows the subject.`;
  * (see hook-scorer.js), which is cheaper and more reliable than asking the
  * model to self-select its best line.
  */
-export function buildUserPrompt({ article, style, hookCount, hashtagRules, learnings }) {
+export function buildUserPrompt({ article, shape: shapeName, style, hookCount, hashtagRules, learnings }) {
+  const shape = getShape(shapeName);
   const styleGuide = OPENING_STYLES[style] ?? OPENING_STYLES['blunt-claim'];
+
+  // Some shapes own their first line - a rotating opener would fight the
+  // quote or the log block for the top of the post.
+  const hookGuide = shape.overrideHook
+    ? shape.overrideHook
+    : `${styleGuide.instruction}\nExample of the shape (do not copy the content): "${styleGuide.example}"`;
 
   return `STORY
 Title: ${article.title}
@@ -88,9 +114,11 @@ WHAT IS FUNNY HERE
 ${article.curation?.joke || 'Find the absurd part of this story and lean on it.'}
 Land this joke. Do not explain it. If the post is not funny, it has failed.
 
-OPENING STYLE FOR THIS POST: ${style}
-${styleGuide.instruction}
-Example of the shape (do not copy the content): "${styleGuide.example}"
+SHAPE FOR THIS POST: ${shapeName}
+${shape.instruction}
+
+THE FIRST LINE
+${hookGuide}
 
 HASHTAGS
 Pick ${hashtagRules.min}-${hashtagRules.max} from this list, or write equally
@@ -103,8 +131,7 @@ Write ${hookCount} different first lines, then the rest of the post once.
 Reply as JSON:
 {
   "hooks": ["${hookCount} different opening lines, each under 140 chars"],
-  "body": "the post after the hook, no hashtags, no closing question",
-  "question": "the closing line that starts an argument",
+${fieldSchema(shape)},
   "hashtags": ["#Example"],
   "memeTopText": "top line of the meme image, under 40 chars, all caps works",
   "memeBottomText": "punchline, under 50 chars",

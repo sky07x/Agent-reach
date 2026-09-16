@@ -6,6 +6,7 @@
  * right, then flip DRY_RUN to false.
  *
  *   npm run dry-run              build one post, publish nothing
+ *   npm run dry-run -- --count=6 build six, one per post shape
  *   npm run run:once             build one post and publish it
  *   npm run templates:preview    render every meme template to data/out
  */
@@ -20,6 +21,12 @@ import { describeCron } from './scheduler/index.js';
 const [, , command = 'run', ...flags] = process.argv;
 const holdBack = flags.includes('--dry-run');
 
+/**
+ * How many posts to build in one go. Handy with --dry-run for seeing several
+ * shapes back to back, since the shape rotation only advances one per post.
+ */
+const count = Number(flags.find((flag) => flag.startsWith('--count='))?.split('=')[1] ?? 1) || 1;
+
 function line(char = '-') {
   console.log(char.repeat(72));
 }
@@ -33,6 +40,7 @@ function showPost(post) {
   line();
   console.log(`Why this story: ${post.curationReason || '(heuristic pick)'}`);
   console.log(`Angle:          ${post.angle || '(none given)'}`);
+  console.log(`Post shape:     ${post.shape}`);
   console.log(`Opening style:  ${post.openingStyle}`);
   console.log(`Meme template:  ${post.memeTemplate}`);
   console.log(`Meme image:     ${post.memePath}`);
@@ -65,7 +73,7 @@ async function runCommand() {
     console.log('\nDRY RUN. Nothing will be published.\n');
   }
 
-  const result = await pipeline.run({ count: 1, publish: !holdBack });
+  const result = await pipeline.run({ count, publish: !holdBack });
 
   if (result.skipped) {
     console.log(`\nNothing to do: ${result.skipped}\n`);

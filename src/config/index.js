@@ -176,7 +176,19 @@ export const config = {
       '#Cybersecurity', '#Kubernetes', '#RAG', '#GPU', '#PromptEngineering',
     ],
     bannedHashtags: ['#AI', '#Technology', '#Innovation', '#Future', '#Growth', '#Motivation'],
-    // Rotate openers so consecutive posts don't feel stamped from one mould.
+    // The skeleton of the post, rotated one per post. Varying only the first
+    // line while every post kept the same hook/body/question/hashtags frame is
+    // what made the feed look templated. See content-engine/shapes.js.
+    postShapes: [
+      'classic-take',
+      'two-line-zinger',
+      'slow-burn-rant',
+      'terminal-log',
+      'quote-reaction',
+      'receipts',
+    ],
+    // Rotate openers too. Five styles against six shapes means the same
+    // pairing does not come round again for thirty posts.
     openingStyles: [
       'blunt-claim',
       'oh-no-observation',
