@@ -28,7 +28,7 @@ Then:
 
 ```bash
 npm run dev                   # admin API on :3001 + cron scheduler
-npm test                      # 170 tests, no network needed
+npm test                      # 190 tests, no network needed
 npm run templates:preview     # render every meme template to data/out/
 npm run linkedin:auth         # one-time LinkedIn OAuth, writes .env for you
 ```
@@ -42,7 +42,8 @@ npm run linkedin:auth         # one-time LinkedIn OAuth, writes .env for you
 | 1. Scrape | `src/scraper/` | TechCrunch RSS, falls back to HTML for the full body. Caches responses, respects robots.txt. | 0 |
 | 2. Classify | `src/classifier/` | Keyword scoring decides most articles for free. Only the grey zone goes to the model. | ~0.3 per article |
 | 3. Curate | `src/curator/` | Scores "meme-ability", shortlists 8, then one call ranks them and gives each pick an angle. | 1 per run |
-| 4. Write | `src/content-engine/` | One call returns 4 hooks and the post. Each post is written to a different shape, and we pick the hook with plain rules. | 1 per post |
+| 4. Write | `src/content-engine/` | One call returns 4 hooks and the post, in a shape the story can actually carry. | 1 per post |
+| 4b. Judge | `src/content-engine/quality.js` | Free structural checks, then one call scoring the post against its story. Below the floor it is **held**, not published. | ~1 per post |
 | 5. Humanize | `src/humanizer/` | Strips AI tells mechanically, then one editor pass, then strips again. | 1 per post |
 | 6. Media | `src/meme-generator/` | Rotates square / portrait / text-only, then picks a template that suits the post. Drawn locally with sharp. | 0 |
 | 7. Publish | `src/publisher/` | LinkedIn API, or the console provider which saves to disk. | 0 |
@@ -358,6 +359,51 @@ An exact tie is broken at random even at `hookJitter: 0`, because a tie is
 precisely the case where the scorer has no opinion. A dry run marks the line
 that ran with `>` so you can see what it was choosing between.
 
+### Is the post any good?
+
+Everything else here checks structure — word counts, em-dashes, banned
+phrases, hashtag relevance, whether two posts share a skeleton. None of it can
+tell whether a post says anything. A post went out that proved it:
+
+> "But reasoning has always been something that we've relied on the frontier
+> model providers for." - Jayesh Govindarajan
+>
+> Salesforce just gave spreadsheets a reason to take over.
+> This should be interesting.
+
+The story was that Salesforce built a reasoning model called Koa on Nvidia's
+Nemotron. The post mentions none of that, Salesforce is not a spreadsheet
+company, and the last line says nothing. It passed every check in the codebase.
+
+Three things now stand between a draft and a publish.
+
+**Shapes can decline a story.** Each shape declares what it needs —
+`quote-reaction` needs a quote worth reacting to, `terminal-log` needs a
+machine in the story, `receipts` needs more than one thing to have happened.
+The rotation walks only the shapes that fit. The post above exists because a
+content-blind queue handed `quote-reaction` to a story whose only quotes were
+bland corporate statements, and the shape then crowded out the joke the
+curator had already found.
+
+**Free structural checks.** Filler closing lines ("this should be
+interesting", "time will tell"), quotes lifted from mid-sentence, a post that
+restates its own hook, a post that mentions nothing from its story. Instant,
+and they run before anything is spent.
+
+**One cheap call that reads the post against the story.** Scored 1-5 on two
+questions: can a reader tell what happened, and is there a real joke or
+opinion in it. Below `content.quality.minScore` the draft gets **one** rewrite
+told exactly what was wrong — same shape, same length, only the words change —
+and if it still fails it is saved with `status: "held"` and `needsReview`.
+
+A held post is refused by the scheduled run and by `npm run publish`, which
+prints the verdict and offers `--force`. A gate that only logs is not a gate.
+
+Calibration matters more than strictness here. The first rubric scored the
+*good* post 2/5 because it read like a news-summary test, and a gate that
+blocks decent work gets switched off. It now scores that post 4/5 across
+repeated runs while still holding the bad one.
+
 ### Hashtags
 
 Measured over the first thirteen posts, before any of this existed:
@@ -603,10 +649,14 @@ switch to x86, change **both** or the function will not start.
 npm test
 ```
 
-170 tests over the parts most likely to degrade quietly rather than crash:
+190 tests over the parts most likely to degrade quietly rather than crash:
 
 - **classifier scoring** — that AI stories pass, e-bike stories don't, exclude
   keywords actually bite, and `ai` doesn't match inside `email` or `chair`.
+- **quality gate** — that the post which actually shipped is caught by the free
+  checks, that the good post is not, that every filler closer is recognised,
+  that shapes decline stories they cannot carry, and that an unreachable judge
+  never blocks a run.
 - **hashtags** — that a tag nothing made relevant is never chosen even when
   everything relevant is fatigued, that a dominant tag is barred once it
   passes its share, that a thin story gets a short honest set rather than

@@ -30,6 +30,7 @@ import {
 } from './shapes.js';
 import { pickBestHook } from './hook-scorer.js';
 import { chooseHashtags, tagsForFrame } from './hashtags.js';
+import { assessDraft } from './quality.js';
 
 const log = createLogger('content-engine');
 
@@ -55,21 +56,36 @@ export function createContentEngine({ config, llm, store }) {
     return learnings?.summary ?? '';
   }
 
-  return {
-    /**
-     * Write one post for one curated article.
-     *
-     * @returns draft with the copy, the chosen hook, and the meme text
-     */
-    async generate(article) {
-      // Each rotation says how to rebuild its own counter from post history,
-      // because they do not all advance once per post.
-      const shapeName = (await rotate(
-        'shapeRotationIndex', settings.postShapes, POST_SHAPES,
-        (posts) => posts.filter((post) => post.shape).length,
-      )) ?? FALLBACK_SHAPE;
+  /**
+   * Write one draft. Notes from a failed attempt are fed back in, so a retry
+   * is told what was wrong rather than just rolling the dice again.
+   */
+  async function writeDraft(article, { notes, choices } = {}) {
+      // A rewrite keeps the format it was given and only fixes the words.
+      //
+      // Letting the retry take fresh rotation values was wrong twice over: it
+      // burned a slot in all four rotations for a post that never shipped,
+      // and it applied feedback about the writing to a completely different
+      // shape, so the note and the rewrite were about different posts.
+      const reusing = Boolean(choices);
 
-      const style = (await rotate(
+      // The rotation only walks shapes this story can actually carry. Handing
+      // quote-reaction to a story with no quote in it is how a post went out
+      // that said nothing at all.
+      const shapeName = choices?.shapeName ?? (await rotation.next({
+        key: 'shapeRotationIndex',
+        names: settings.postShapes,
+        known: POST_SHAPES,
+        seed: (posts) => posts.filter((post) => post.shape).length,
+        accept: (name) => POST_SHAPES[name].fits(article),
+      })) ?? FALLBACK_SHAPE;
+
+      if (!reusing) {
+        const declined = settings.postShapes.filter((name) => POST_SHAPES[name] && !POST_SHAPES[name].fits(article));
+        if (declined.length) log.debug('Shapes this story cannot carry', { declined });
+      }
+
+      const style = choices?.style ?? (await rotate(
         'styleRotationIndex', settings.openingStyles, OPENING_STYLES,
         (posts) => posts.filter((post) => post.openingStyle).length,
       )) ?? 'blunt-claim';
@@ -80,14 +96,14 @@ export function createContentEngine({ config, llm, store }) {
       // rotation, so the endings stay evenly spread over the posts that
       // actually use one. That is also why this one counts posts that have a
       // closerStyle rather than posts in general.
-      const closerStyle = shape.closer === 'rotate'
+      const closerStyle = reusing ? choices.closerStyle : (shape.closer === 'rotate'
         ? (await rotate(
           'closerRotationIndex', settings.closerStyles, CLOSER_STYLES,
           (posts) => posts.filter((post) => post.closerStyle).length,
         )) ?? 'argument-bait'
-        : null;
+        : null);
 
-      const lengthMood = (await rotate(
+      const lengthMood = choices?.lengthMood ?? (await rotate(
         'lengthRotationIndex', settings.lengthMoods, LENGTH_MOODS,
         (posts) => posts.filter((post) => post.lengthMood).length,
       )) ?? 'mid';
@@ -112,6 +128,7 @@ export function createContentEngine({ config, llm, store }) {
             banned: settings.bannedHashtags,
           },
           learnings: await getLearnings(),
+          notes,
         }),
       });
 
@@ -205,6 +222,50 @@ export function createContentEngine({ config, llm, store }) {
         hashtags: hashtags.join(" "),
         hashtagsRelaxed: hashtagPick.relaxed,
       });
+
+      return draft;
+  }
+
+  return {
+    /**
+     * Write one post for one curated article, and refuse to hand back
+     * something not worth posting.
+     *
+     *  draft, carrying needsReview when it did not pass
+     */
+    async generate(article) {
+      let draft = await writeDraft(article);
+      let assessment = await assessDraft({ article, draft, llm, settings: settings.quality });
+
+      // One retry, told exactly what was wrong. Two models disagreeing twice
+      // is a signal about the story, not something more attempts will fix.
+      if (!assessment.ok) {
+        log.warn("Rewriting after a failed assessment", { problems: assessment.problems });
+
+        draft = await writeDraft(article, {
+          notes: assessment.problems,
+          // Same shape, style, ending and length. Only the words change.
+          choices: {
+            shapeName: draft.shape,
+            style: draft.openingStyle,
+            closerStyle: draft.closerStyle,
+            lengthMood: draft.lengthMood,
+          },
+        });
+        assessment = await assessDraft({ article, draft, llm, settings: settings.quality });
+      }
+
+      draft.quality = assessment;
+      draft.needsReview = !assessment.ok;
+
+      if (!assessment.ok) {
+        log.warn("Draft is not good enough to publish", {
+          title: article.title,
+          score: assessment.score,
+          verdict: assessment.verdict,
+          problems: assessment.problems,
+        });
+      }
 
       return draft;
     },

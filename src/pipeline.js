@@ -131,7 +131,11 @@ export function createPipeline(agent) {
       humanizerReport: humanized.report,
       hookScoreboard: draft.hookScoreboard,
       hashtagReasons: draft.hashtagReasons,
-      status: 'draft',
+      quality: draft.quality,
+      needsReview: Boolean(draft.needsReview),
+      // A post that failed the quality gate is parked, not published. A gate
+      // that only logs is not a gate.
+      status: draft.needsReview ? "held" : "draft",
       createdAt: new Date().toISOString(),
     };
 
@@ -142,6 +146,19 @@ export function createPipeline(agent) {
 
   /** Send one finished post out. */
   async function act({ post, imageBuffer }) {
+    // The last line of defence. A post the judge rejected does not go out on
+    // a schedule; it waits for a person. This is checked here as well as at
+    // the point it was written, because act() is reachable on its own.
+    if (post.needsReview) {
+      log.warn('Holding a post back, it did not pass the quality gate', {
+        postId: post.id,
+        score: post.quality?.score,
+        verdict: post.quality?.verdict,
+      });
+
+      return { ...post, status: 'held' };
+    }
+
     try {
       const result = await publisher.publish({
         text: post.text,
@@ -153,6 +170,7 @@ export function createPipeline(agent) {
 
       const patch = {
         status: result.dryRun ? 'draft' : 'published',
+        needsReview: false,
         publishedAt: new Date().toISOString(),
         providerPostId: result.providerPostId ?? null,
         providerUrl: result.url ?? null,

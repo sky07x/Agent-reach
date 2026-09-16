@@ -203,6 +203,19 @@ export const config = {
     // is still broken at random even then, because a tie is precisely the
     // case where this scorer has no opinion.
     hookJitter: 0.12,
+    // Is the post worth posting at all?
+    //
+    // Every other check in this pipeline is structural, and a post went out
+    // that passed all of them while saying nothing: it never mentioned what
+    // the story was, and closed on "This should be interesting." A semantic
+    // failure needs a semantic check, so this one costs a call.
+    quality: {
+      useLlmJudge: true,
+      // Out of 5. Three is "accurate, mildly amusing, forgettable", which is
+      // the floor for something going out under your own name.
+      minScore: 3,
+    },
+
     hashtagCount: { min: 3, max: 5 },
     // How many tags a post gets, rotated like everything else. Twelve of the
     // first thirteen posts carried exactly three, which is a small tell but a

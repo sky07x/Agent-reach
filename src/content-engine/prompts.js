@@ -107,6 +107,7 @@ export function buildUserPrompt({
   hookCount,
   hashtagRules,
   learnings,
+  notes,
 }) {
   const shape = getShape(shapeName);
   const styleGuide = OPENING_STYLES[style] ?? OPENING_STYLES['blunt-claim'];
@@ -152,7 +153,13 @@ Pick ${hashtagRules.min}-${hashtagRules.max} from this list, or write equally
 specific ones: ${hashtagRules.preferred.join(' ')}
 Never use these: ${hashtagRules.banned.join(' ')}
 ${learnings ? `\nWHAT HAS WORKED BEFORE\n${learnings}` : ''}
+${notes?.length ? `
+THE LAST ATTEMPT AT THIS POST WAS REJECTED
+${notes.map((note) => `- ${note}`).join('\n')}
 
+Fix every one of those. A rewrite that repeats them is worse than the first
+attempt, because it means you did not read this.
+` : ''}
 Write ${hookCount} different first lines, then the rest of the post once.
 
 Reply as JSON:

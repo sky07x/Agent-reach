@@ -39,10 +39,20 @@ export function createRotation({ store }) {
      * @param {string[]} options.names  the rotation, in order
      * @param {object} options.known    definitions, to drop names that no longer exist
      * @param {function} options.seed   given recent posts, how many used this rotation
+     * @param {function} [options.accept] drop options this particular post cannot use
      * @returns {Promise<string|null>}  null only if nothing in names is usable
+     *
+     * `accept` is what stops a rotation being blind to the thing it is
+     * rotating over. A queue that hands "quote-reaction" to a story with no
+     * quote in it produces a post about nothing, which is exactly what
+     * happened: the shape crowded out the joke the curator had already found,
+     * and the result went out saying neither.
      */
-    async next({ key, names, known, seed }) {
-      const usable = (names ?? []).filter((name) => !known || known[name]);
+    async next({ key, names, known, seed, accept }) {
+      const usable = (names ?? [])
+        .filter((name) => !known || known[name])
+        .filter((name) => !accept || accept(name));
+
       if (!usable.length) return null;
 
       let index = await store.getState(key, null);

@@ -39,6 +39,11 @@ function showPost(post) {
   console.log(`Story: ${post.articleTitle}`);
   console.log(`       ${post.articleUrl}`);
   line();
+  if (post.quality) {
+    const mark = post.needsReview ? 'HELD' : 'ok';
+    console.log(`Quality:        ${post.quality.score ?? 'n/a'}/5 ${mark} - ${post.quality.verdict}`);
+    for (const problem of post.quality.problems ?? []) console.log(`                - ${problem}`);
+  }
   console.log(`Why this story: ${post.curationReason || '(heuristic pick)'}`);
   console.log(`Angle:          ${post.angle || '(none given)'}`);
   console.log(`Frame:          ${post.frame ?? '(none)'}`);
@@ -169,6 +174,18 @@ async function publishCommand() {
 
   if (post.status === 'published') {
     console.error(`\nThat post is already on LinkedIn: ${post.providerUrl ?? post.providerPostId}\n`);
+    process.exit(1);
+  }
+
+  // Publishing by hand is the path a rejected post is most likely to escape
+  // through, so it is refused here too. --force is available and deliberate.
+  if (post.needsReview && !flags.includes('--force')) {
+    console.error(`\nThis post did not pass the quality gate, so it is on hold.\n`);
+    console.error(`  score:   ${post.quality?.score ?? 'n/a'} of 5`);
+    console.error(`  verdict: ${post.quality?.verdict ?? '(none)'}`);
+    for (const problem of post.quality?.problems ?? []) console.error(`  - ${problem}`);
+    console.error(`\nRun a fresh one with: npm run dry-run`);
+    console.error(`Or send it anyway with: npm run publish -- ${post.id} --confirm --force\n`);
     process.exit(1);
   }
 

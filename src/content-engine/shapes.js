@@ -149,6 +149,57 @@ export function fieldsFor(shape, closerStyleName) {
     : field));
 }
 
+/**
+ * What a story has to offer before a shape can be used on it.
+ *
+ * A rotation that ignores this produces posts about nothing. The real case:
+ * quote-reaction came up for a story whose only quotes were bland corporate
+ * statements. The shape leads with a quote and allows one line of reaction,
+ * so it led with "But reasoning has always been something that we've relied
+ * on the frontier model providers for" - a sentence fragment starting with a
+ * conjunction - and the actual joke the curator had already found never made
+ * it into the post at all.
+ *
+ * So a shape can decline a story, and the rotation walks only what fits.
+ */
+
+/** Does the article contain a quote long enough to be worth reacting to? */
+export function hasUsableQuote(article) {
+  const text = `${article?.title ?? ''} ${article?.summary ?? ''} ${article?.body ?? ''}`;
+
+  // Curly or straight quotes around something substantial. Short fragments
+  // are product names in quotes, not somebody saying a thing.
+  const quotes = text.match(/["“]([^"”]{25,200})["”]/g) ?? [];
+
+  return quotes.some((quote) => {
+    const inner = quote.slice(1, -1).trim();
+
+    // A quote that opens on a conjunction is a fragment lifted out of the
+    // middle of a sentence, and reads as one.
+    return !/^(but|and|so|which|that|because)\b/i.test(inner) && inner.split(/\s+/).length >= 6;
+  });
+}
+
+/** Is there a machine in this story, or is it people talking about one? */
+export function hasMechanism(article) {
+  const text = `${article?.title ?? ''} ${article?.summary ?? ''}`.toLowerCase();
+
+  return [
+    'outage', 'bug', 'crash', 'error', 'deploy', 'server', 'api', 'code',
+    'model', 'agent', 'tool', 'build', 'run', 'ship', 'release', 'latency',
+    'benchmark', 'token', 'prompt', 'database', 'cluster', 'pipeline',
+  ].some((word) => text.includes(word));
+}
+
+/** Enough separate happenings to tell as a sequence of beats? */
+export function hasSequence(article) {
+  const text = `${article?.title ?? ''} ${article?.summary ?? ''}`;
+
+  // Either an explicit sequence, or simply enough distinct facts to list.
+  return /\b(then|after|later|first|followed|weeks|days|months)\b/i.test(text)
+    || (text.match(/\b[A-Z][a-zA-Z0-9.+-]{2,}\b/g) ?? []).length >= 4;
+}
+
 export const POST_SHAPES = {
   /**
    * The original shape. Still the best one for a story with a real argument
@@ -161,6 +212,9 @@ closing line. Every line earns its place.`,
     words: { min: 55, max: 155 },
     // No strong affinity: an argument can be illustrated any number of ways.
     layouts: [],
+    // The fallback shape. Every story can carry an argument, which is why
+    // this one must never decline: something has to be able to run.
+    fits: () => true,
     fields: [
       {
         key: 'body',
@@ -190,6 +244,8 @@ question. Trust the reader.`,
     words: { min: 14, max: 30 },
     // Big bold type for a line meant to stop a thumb.
     layouts: ['classic'],
+    // A zinger needs one absurd fact, which any story worth curating has.
+    fits: () => true,
     fields: [
       {
         key: 'punchline',
@@ -220,6 +276,8 @@ feel like you put the phone down after typing it.`,
     words: { min: 40, max: 105 },
     // A rant is someone talking, so give it a voice on the image too.
     layouts: ['chat', 'classic'],
+    // You can only rant about something that actually does something.
+    fits: hasMechanism,
     fields: [
       {
         key: 'lines',
@@ -250,6 +308,9 @@ them technically plausible for the story. No more than five lines.`,
     words: { min: 35, max: 85 },
     // The obvious one. A post that is fake terminal output gets a terminal.
     layouts: ['terminal'],
+    // Fake log output about a funding round is nonsense. There has to be a
+    // machine in the story for a machine to be narrating.
+    fits: hasMechanism,
     fields: [
       {
         key: 'logLines',
@@ -279,6 +340,8 @@ absurd exact phrase from it instead.`,
     closer: 'rotate',
     words: { min: 22, max: 60 },
     layouts: ['quote'],
+    // The one that went wrong. No quote, no quote-reaction.
+    fits: hasUsableQuote,
     overrideHook: `The first line is the quote itself, in quotation marks,
 followed by an em-dash-free attribution on the same line or the next one.
 Example shape: "We don't see this as a security risk." - the CTO, last week.`,
@@ -317,6 +380,8 @@ same way. Then one line of verdict.`,
     words: { min: 25, max: 70 },
     // Beats are a sequence, and two-panel is the before/after shape.
     layouts: ['two-panel'],
+    // Beats need things to have happened, plural.
+    fits: hasSequence,
     fields: [
       {
         key: 'beats',
