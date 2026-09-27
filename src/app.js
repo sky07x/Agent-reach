@@ -32,7 +32,7 @@ export function createApp({ agent, pipeline, scheduler }) {
   app.get('/health', (req, res) => {
     // On Lambda the in-process cron is never started, because EventBridge is
     // the scheduler. Reporting the node-cron status there would say
-    // "active: false" while the agent is in fact posting three times a week,
+    // "active: false" while the agent is in fact posting twice a week,
     // which is exactly the wrong thing to tell someone checking on it.
     const onLambda = Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
 
@@ -46,7 +46,7 @@ export function createApp({ agent, pipeline, scheduler }) {
       schedule: onLambda
         ? {
           runBy: 'aws-eventbridge',
-          readable: 'Tue/Wed/Thu at 9:30 Asia/Kolkata (04:00 UTC)',
+          readable: 'Tue/Thu at 9:30 Asia/Kolkata (04:00 UTC)',
           note: 'Check the real state with: aws events describe-rule --name '
             + `${agent.config.agentName}-post-schedule`,
         }

@@ -5,7 +5,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { scoreHook, pickBestHook } from '../src/content-engine/hook-scorer.js';
+import { scoreHook, pickBestHook, rateHooks, isGenericHook } from '../src/content-engine/hook-scorer.js';
 
 test('a short specific hook beats a long vague one', () => {
   const sharp = scoreHook('OpenAI just deprecated the thing you shipped last week.');
@@ -138,4 +138,81 @@ test('jitter still respects the character limit', () => {
   const { best } = pickBestHook(hooks, { maxChars: 140, jitter: 0.12, random: () => 0.99 });
 
   assert.equal(best, hooks[0], 'a truncated hook is never a contender');
+});
+
+/* --- generic hooks and story anchors ------------------------------------- */
+
+test('the generic hooks from the brief are all marked down', () => {
+  for (const hook of [
+    'AI is changing the way we work.',
+    'Here\'s what nobody is talking about.',
+    'This changes everything for developers.',
+    'Looks like we need a timeout for rogue AIs.',
+    'So many AI projects never see the light of day.',
+    'Who knew AI needed a babysitter?',
+  ]) {
+    const { notes } = scoreHook(hook);
+    assert.ok(notes.some((note) => note.startsWith('generic') || note.startsWith('cliche')), `not caught: ${hook}`);
+    assert.ok(isGenericHook(hook) || notes.some((note) => note.startsWith('cliche')), `isGenericHook missed: ${hook}`);
+  }
+});
+
+test('a hook with nothing from the story loses to one anchored in it', () => {
+  // Both are short and confident, so the old rules scored them the same.
+  const anchors = ['glass imaging', 'openai', '300', 'apple'];
+  const anchored = scoreHook('OpenAI paid $300M for the team behind Apple\'s Portrait Mode.', 140, { anchors });
+  const floating = scoreHook('Everyone wants a better camera these days.', 140, { anchors });
+
+  assert.ok(anchored.notes.includes('anchored in the story'));
+  assert.ok(floating.notes.includes('nothing specific from the story'));
+  assert.ok(anchored.score > floating.score + 0.3);
+});
+
+test('an anchor matches whole words only', () => {
+  const { notes } = scoreHook('The metadata is wrong again.', 140, { anchors: ['meta'] });
+  assert.ok(notes.includes('nothing specific from the story'), '"meta" is not inside "metadata"');
+});
+
+test('the rater decides between hooks the rules cannot tell apart', () => {
+  const hooks = [
+    { text: 'They gave the agent shell access.', style: 'blunt-claim' },
+    { text: 'The agent got shell access in production.', style: 'oh-no-observation' },
+  ];
+
+  // Identical under the rules; the rater prefers the second.
+  const { best, style, scored } = pickBestHook(hooks, {
+    ratings: [{ score: 2, reason: 'flat' }, { score: 5, reason: 'specific curiosity' }],
+    random: () => 0,
+  });
+
+  assert.equal(best, hooks[1].text);
+  assert.equal(style, 'oh-no-observation', 'the winning style is reported back');
+  assert.ok(scored[0].notes.some((note) => note.startsWith('rated 5/5')));
+});
+
+test('a highly rated generic hook still does not beat a specific one', () => {
+  // The rules keep a veto: a rater fooled by a confident cliché cannot ship it.
+  const anchors = ['cymphony', '30'];
+  const { best } = pickBestHook(
+    ['AI agents are the new security headache you didn\'t sign up for.', 'Cymphony raised $30M to watch agents that never log off.'],
+    { anchors, ratings: [{ score: 4 }, { score: 3 }], random: () => 0 },
+  );
+
+  assert.equal(best, 'Cymphony raised $30M to watch agents that never log off.');
+});
+
+test('the last post\'s opening style is marked down, slightly', () => {
+  const { scored } = pickBestHook(
+    [{ text: 'They gave the agent shell access.', style: 'blunt-claim' }, { text: 'The agent got shell access in production.', style: 'oh-no-observation' }],
+    { avoidStyle: 'blunt-claim', random: () => 0 },
+  );
+
+  assert.equal(scored[0].style, 'oh-no-observation', 'a tie goes to the style the last post did not use');
+});
+
+test('the rater never throws, and says nothing when it cannot help', async () => {
+  const broken = { chatJson: async () => { throw new Error('rate limited'); } };
+
+  assert.equal(await rateHooks({ hooks: ['a', 'b'], article: { title: 'x' }, llm: broken }), null);
+  assert.equal(await rateHooks({ hooks: ['only one'], article: { title: 'x' }, llm: broken }), null, 'nothing to compare');
 });

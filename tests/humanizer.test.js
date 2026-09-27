@@ -204,3 +204,10 @@ test('an editor pass that drops the hashtags cannot actually lose them', async (
   assert.match(text, /#LLM #DevTools$/, `hashtags lost: ${text}`);
   assert.equal(report.hashtagsPreserved, true);
 });
+
+test('replacing "a game-changer" does not leave "a a big deal" behind', async () => {
+  const { stripBannedPhrases } = await import('../src/humanizer/rules.js');
+
+  assert.equal(stripBannedPhrases("It's a game-changer for safety.").text, "It's a big deal for safety.");
+  assert.equal(stripBannedPhrases('This is game-changing.').text, 'This is a big deal.');
+});

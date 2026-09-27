@@ -6,7 +6,7 @@ Description: >
 
   Three pieces:
     a DynamoDB table   the agent's memory (dedupe, post history, learnings)
-    a scheduled Lambda EventBridge fires it 3x a week, it makes one post
+    a scheduled Lambda EventBridge fires it 2x a week, it makes one post
     an admin Lambda    the Express admin API behind a Function URL
 
   Deployed as a plain zip. Run infra/scripts/build.sh first to produce the
@@ -22,7 +22,7 @@ Parameters:
     Type: String
     # EventBridge cron is always UTC and needs a "?" in one of the day fields.
     # 04:00 UTC = 09:30 IST. Tue, Wed, Thu.
-    Default: 'cron(0 4 ? * TUE,WED,THU *)'
+    Default: 'cron(0 4 ? * TUE,THU *)'
     Description: When posts go out, in UTC.
 
   DryRun:

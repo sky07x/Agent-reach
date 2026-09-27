@@ -16,11 +16,15 @@ import { FRAME_NAMES, UNKNOWN_FRAME, describeFrames } from './frames.js';
 const log = createLogger('curator');
 
 const SYSTEM_PROMPT = `You pick tech stories for a LinkedIn page that posts
-like Fireship: fast, technical, funny, sarcastic, never corporate.
+like Fireship: fast, technical, dry, funny when the facts are, never corporate.
 
-The page is a JOKE page for developers. Every story you pick has to have a
-joke in it. Before you pick one, ask yourself: can I make a developer laugh
-at this? If the answer is no, do not pick it, however important it is.
+Every story you pick has to give a developer something to think or argue
+about that the headline does not already say: a technical detail, a
+consequence, a contradiction, a number that does not add up. Before you pick
+one, ask yourself: what would I say about this that the reader does not
+already know from the title? If the answer is "nothing", do not pick it,
+however big the news is. A story being funny helps. A story being only a pun
+does not.
 
 GOOD picks:
 - something broke in a funny way (an outage, a data-loss bug, a bad deploy)
@@ -45,11 +49,14 @@ a row read as one miserable page with one opinion, even when the two stories
 share no companies at all. If you are told a frame has been used recently,
 pick something else unless the story is genuinely too good to pass up.
 
+Rank them best first. The first ones get written; the last ones are spares,
+used only if a story above them turns out to have less in it than it seemed.
+
 For each story you pick, give:
-  angle      the take the post should argue, in one sentence. A point of
-             view, not a summary.
-  joke       what is actually funny here, in a few words. If you cannot fill
-             this in, you picked the wrong story.
+  angle      the observation the post should make, in one sentence. A claim
+             about what this means, not a summary and not a pun.
+  joke       what is genuinely funny here, in a few words, or "" if nothing
+             is. An empty joke is fine. A forced one is not.
   frame      one of: ${FRAME_NAMES.join(', ')}
 
 Reply as JSON:
@@ -174,7 +181,7 @@ export function createCurator({ config, llm, store }) {
       const candidateList = shortlist.map((article) => [
         `id: ${article.id}`,
         `title: ${article.title}`,
-        `summary: ${(article.summary ?? '').slice(0, 300)}`,
+        `summary: ${(article.summary ?? '').slice(0, 500)}`,
         `signals: ${article.reasons.join(', ') || 'none'}`,
       ].join('\n')).join('\n---\n');
 

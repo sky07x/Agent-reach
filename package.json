@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Reads TechCrunch AI/CS stories, decides which are worth posting, writes them in a Fireship-ish voice, renders a meme, and publishes to LinkedIn 3x a week.",
+  "description": "Reads TechCrunch AI/CS stories, decides which are worth posting, writes them in a Fireship-ish voice, renders a meme, and publishes to LinkedIn twice a week.",
   "main": "src/server.js",
   "scripts": {
     "dev": "node --env-file-if-exists=.env src/server.js",

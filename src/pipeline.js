@@ -12,6 +12,8 @@ import path from 'node:path';
 import { createLogger } from './lib/logger.js';
 import { countWords } from './content-engine/index.js';
 import { getShape } from './content-engine/shapes.js';
+import { structuralProblems } from './content-engine/quality.js';
+import { applyRules, splitOffHashtags, reattachHashtags } from './humanizer/index.js';
 import { getUsage, resetUsage } from './lib/llm-client.js';
 
 const log = createLogger('pipeline');
@@ -47,13 +49,20 @@ export function createPipeline(agent) {
 
   /* --- reason ------------------------------------------------------------ */
 
-  /** Choose which stories deserve a post. */
+  /**
+   * Choose which stories deserve a post.
+   *
+   * A few spares are ranked as well, in order, because the content engine can
+   * now turn a story down for having nothing in it. Without a stand-in, a
+   * thin story would mean no post at all.
+   */
   async function reason(count) {
     const candidates = await store.listPostableArticles({ maxAgeDays: config.scraper.maxArticleAgeDays });
 
     log.info('Candidates for curation', { count: candidates.length });
 
-    const picked = await curator.curate(candidates, count);
+    const spares = config.content.insight?.enabled ? (config.content.insight.spareStories ?? 0) : 0;
+    const picked = await curator.curate(candidates, count + spares);
 
     // Only fetch the full article body for the few stories we will write about.
     const enriched = await scraper.enrich(picked);
@@ -73,10 +82,55 @@ export function createPipeline(agent) {
 
   /* --- act --------------------------------------------------------------- */
 
-  /** Turn one curated article into a finished, humanized, illustrated post. */
+  /**
+   * Turn one curated article into a finished, humanized, illustrated post.
+   *
+   * @returns {Promise<object|null>} null when the story was turned down as
+   *   too thin to post about. It is marked so it is not offered again.
+   */
   async function buildPost(article) {
     const draft = await contentEngine.generate(article);
-    const humanized = await humanizer.humanize(draft.text, { shapeNote: draft.shapeInstruction });
+
+    if (draft.rejected) {
+      log.warn('Story turned down, nothing worth saying about it', { title: article.title, reason: draft.rejected });
+
+      await store.updateArticle(article.id, {
+        rejectedForPost: draft.rejected,
+        insight: draft.insight ?? null,
+      });
+
+      return null;
+    }
+
+    let humanized = await humanizer.humanize(draft.text, { shapeNote: draft.shapeInstruction });
+
+    // The editor pass runs after the quality gate, so what it changes was
+    // never checked. It is a language model, and it will happily turn a
+    // plain line into "This shows safety isn't always the priority." If it
+    // added a problem the gated draft did not have, ship the gated draft
+    // with only the mechanical rules applied.
+    if (!draft.needsReview) {
+      const firstLine = (text) => text.split('\n').find((line) => line.trim()) ?? '';
+      const authorContext = config.content.authorContext;
+      const before = new Set(structuralProblems({ article, draft, authorContext }));
+      const introduced = structuralProblems({
+        article,
+        draft: { ...draft, text: humanized.text, hook: firstLine(humanized.text) },
+        authorContext,
+      }).filter((problem) => !before.has(problem));
+
+      if (introduced.length) {
+        log.warn('The editor pass broke a checked post, keeping the checked version', { introduced });
+
+        const { prose, hashtagLine } = splitOffHashtags(draft.text);
+        const ruled = applyRules(prose, { maxEmDashes: config.humanizer.maxEmDashes });
+
+        humanized = {
+          text: reattachHashtags(ruled.text, hashtagLine),
+          report: { ...humanized.report, editorPass: 'reverted', editorIntroduced: introduced },
+        };
+      }
+    }
 
     const postId = newPostId();
 
@@ -128,6 +182,8 @@ export function createPipeline(agent) {
       memeText: draft.meme,
       curationReason: article.curation?.reason ?? '',
       angle: article.curation?.angle ?? '',
+      // What the post was meant to say, so a reviewer can check it did.
+      insight: draft.insight ?? null,
       humanizerReport: humanized.report,
       hookScoreboard: draft.hookScoreboard,
       hashtagReasons: draft.hashtagReasons,
@@ -235,9 +291,37 @@ export function createPipeline(agent) {
       }
 
       const posts = [];
+      const rejected = [];
+      let ready = 0;
 
+      // Picks arrive best first. Work down them until enough posts exist; the
+      // spares at the end only get used when something above them was thin.
       for (const article of picked) {
+        if (ready >= count) break;
+
         const built = await buildPost(article);
+
+        if (!built) {
+          const reread = await store.getArticle(article.id);
+          rejected.push({ title: article.title, reason: reread?.rejectedForPost ?? 'too thin' });
+          continue;
+        }
+
+        // Held after its one rewrite. Two failed attempts say more about the
+        // story than about the writing, and in practice this is where thin
+        // stories are really caught: the cheap model rates almost every story
+        // as substantial, but its judge does notice when the post built on
+        // one says nothing. The held post is kept for review; the story is
+        // not offered again, and the next pick gets its chance instead of the
+        // run publishing nothing.
+        if (built.post.needsReview) {
+          await store.updateArticle(article.id, { rejectedForPost: `held: ${built.post.quality?.verdict ?? 'failed the quality gate'}` });
+          rejected.push({ title: article.title, reason: `written and held: ${built.post.quality?.verdict ?? ''}`, postId: built.post.id });
+          posts.push(built.post);
+          continue;
+        }
+
+        ready += 1;
 
         if (publish) {
           posts.push(await act(built));
@@ -257,14 +341,17 @@ export function createPipeline(agent) {
 
       const usage = getUsage();
 
+      if (!ready) log.warn('Nothing worth publishing this cycle', { rejected });
+
       log.info('Run finished', {
         posts: posts.length,
+        rejected: rejected.length,
         seconds: Math.round((Date.now() - startedAt) / 1000),
         llmCalls: usage.calls,
         costUsd: Number(usage.costUsd.toFixed(4)),
       });
 
-      return { perceived, posts, learned, usage };
+      return { perceived, posts, rejected, learned, usage };
     },
   };
 }

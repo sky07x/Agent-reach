@@ -48,25 +48,39 @@ function tagLine(hashtags) {
  */
 export const CLOSER_STYLES = {
   'argument-bait': {
-    instruction: 'End on a question someone will want to argue with in the comments.',
-    field: 'a specific question people will argue about, never "what do you think?"',
+    instruction: `End on one specific question about THIS story that two informed
+developers would answer differently. Name the thing it is about. Never "what do
+you think?", "thoughts?" or anything that would fit under any other post.`,
+    field: 'one specific question naming something from the story, never "what do you think?"',
+    // A question with nothing to disagree about is "what do you think?" in a
+    // costume. Only offered when the insight found a real counter-argument.
+    needsTension: true,
   },
   'flat-verdict': {
-    instruction: 'End on a flat verdict. A statement, not a question. Do not soften it.',
-    field: 'a flat verdict, under 10 words, no question mark',
+    instruction: 'End on a flat verdict about this specific story. A statement, not a question. Do not soften it.',
+    field: 'a flat verdict about this story, under 12 words, no question mark',
   },
   prediction: {
-    instruction: 'End by calling what happens next, stated as fact, with no hedging.',
-    field: 'what happens next, stated as fact, under 15 words, no question mark',
+    instruction: `End by calling one specific, checkable thing that happens next
+because of this story, stated as fact. "Things will change" is not a
+prediction; "every notetaker without a CRM integration is a feature now" is.`,
+    field: 'one specific, checkable consequence of this story, under 15 words, no question mark',
   },
   dare: {
-    instruction: 'End by daring the reader to disagree, or betting against them.',
-    field: 'a dare or a bet, under 15 words',
+    instruction: `End with a bet about this story that someone could actually
+lose. Name the outcome. Not "disagree if you want", not "good luck with that".`,
+    field: 'a specific bet about this story, under 15 words',
+    needsTension: true,
   },
+  // It used to ask for "a throwaway aside", and that is exactly what came
+  // back: "Funny how that works." "Kind of ironic, isn't it?" A shrug is not
+  // an aside. The good version adds one more real fact, casually: "Oh, and
+  // the 12-month revenue retention rate jumped."
   aside: {
-    instruction: `End on a throwaway aside, the way someone mutters the last
-line of a story. Lowercase is fine. It should feel unplanned.`,
-    field: 'a throwaway aside, lowercase, under 10 words',
+    instruction: `End on a casual aside that adds ONE more real detail from the
+story, the one a reader would find telling. Lowercase is fine. Not a reaction
+("funny how that works", "kind of ironic"): a fact.`,
+    field: 'one more telling fact from the story, said casually, under 15 words, not a reaction',
   },
   none: {
     instruction: `The post just stops after the last line. No closing line, no
@@ -74,6 +88,21 @@ question, no call to action. Do not wrap anything up.`,
     field: null,
   },
 };
+
+/**
+ * Can this ending be used on this story?
+ *
+ * Endings used to rotate blind, so a story with nothing to argue about still
+ * got "argument-bait" and closed on "Can any startup survive the AI tornado?".
+ * An ending that needs a disagreement is only offered when the insight step
+ * found one. Without an insight we cannot tell, so nothing is ruled out.
+ */
+export function closerFits(name, insight) {
+  const style = CLOSER_STYLES[name];
+  if (!style) return false;
+  if (!style.needsTension || !insight) return true;
+  return Boolean(String(insight.tension ?? '').trim());
+}
 
 export function getCloserStyle(name) {
   return CLOSER_STYLES[name] ?? CLOSER_STYLES['argument-bait'];
@@ -180,15 +209,32 @@ export function hasUsableQuote(article) {
   });
 }
 
-/** Is there a machine in this story, or is it people talking about one? */
+/** Whole-word match, so "run rate" is not a run and "Shipt" is not a ship. */
+function mentions(text, word) {
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, 'i').test(text);
+}
+
+/**
+ * Is there a machine in this story, or is it people talking about one?
+ *
+ * This used plain includes(), and the words were short enough to hide inside
+ * others: "revenue run rate" counted as a run, "Shipt" as a ship, "capital"
+ * as an api. That is how a fundraising story and a grocery app both got fake
+ * terminal logs with invented numbers in them. Whole words only, and no
+ * "run" or "ship", which describe every business story ever written.
+ */
 export function hasMechanism(article) {
   const text = `${article?.title ?? ''} ${article?.summary ?? ''}`.toLowerCase();
 
   return [
-    'outage', 'bug', 'crash', 'error', 'deploy', 'server', 'api', 'code',
-    'model', 'agent', 'tool', 'build', 'run', 'ship', 'release', 'latency',
-    'benchmark', 'token', 'prompt', 'database', 'cluster', 'pipeline',
-  ].some((word) => text.includes(word));
+    'outage', 'bug', 'bugs', 'crash', 'crashed', 'error', 'errors', 'deploy',
+    'deployment', 'server', 'servers', 'api', 'apis', 'code', 'codebase',
+    'model', 'models', 'agent', 'agents', 'tool', 'tools', 'build', 'latency',
+    'benchmark', 'benchmarks', 'token', 'tokens', 'prompt', 'prompts',
+    'database', 'cluster', 'pipeline', 'inference', 'gpu', 'gpus', 'compiler',
+    'sdk', 'repo', 'mcp',
+  ].some((word) => mentions(text, word));
 }
 
 /** Enough separate happenings to tell as a sequence of beats? */
@@ -206,8 +252,11 @@ export const POST_SHAPES = {
    * in it, which is why it stays in the rotation rather than being deleted.
    */
   'classic-take': {
-    instruction: `Hook, then two or three short lines making your case, then a
-closing line. Every line earns its place.`,
+    instruction: `Hook, then two or three short lines making your case: the
+evidence, what it means, and the point. Then a closing line. Every line
+earns its place, and none of them retells the headline. One idea only.`,
+    // What the insight step reads when it decides which shapes suit a story.
+    suits: 'any story with a real argument in it; the safe default',
     closer: 'rotate',
     words: { min: 55, max: 155 },
     // No strong affinity: an argument can be illustrated any number of ways.
@@ -237,9 +286,10 @@ closing line. Every line earns its place.`,
    */
   'two-line-zinger': {
     instruction: `Two lines. That is the whole post. The hook, then one line
-that lands the punch. Do not add context, do not explain, do not ask a
-question. Trust the reader.`,
+that lands the point: a consequence of the fact, not a reaction to it. Do
+not add context, do not explain, do not ask a question. Trust the reader.`,
     // Owns its ending: a zinger with anything after it is not a zinger.
+    suits: 'one fact so absurd or contradictory that putting it next to its consequence is the whole point',
     closer: 'own',
     words: { min: 14, max: 30 },
     // Big bold type for a line meant to stop a thumb.
@@ -268,9 +318,11 @@ question. Trust the reader.`,
    */
   'slow-burn-rant': {
     instruction: `A short rant. Hook, then three or four lines that build,
-each one its own paragraph. Sentences get shorter as you go. End on a flat
-statement, not a question. Never ask the reader anything. The last line should
+each one its own paragraph. Each line is a complete sentence, never half of
+one. Sentences get shorter as you go. End on a flat statement, not a question.
+Never ask the reader anything, not even rhetorically. The last line should
 feel like you put the phone down after typing it.`,
+    suits: 'a decision, default or product that will cause specific, real developer pain',
     // Owns its ending: stopping dead is the whole point of the shape.
     closer: 'own',
     words: { min: 40, max: 105 },
@@ -301,8 +353,10 @@ feel like you put the phone down after typing it.`,
   'terminal-log': {
     instruction: `One line of setup, then a short block of fake terminal or log
 output that tells the story, then one line reacting to it. The log lines must
-look like real output: prefixes, timestamps, exit codes, stack frames. Make
-them technically plausible for the story. No more than five lines.`,
+look like real output: prefixes, exit codes, stack frames, clock times. Make
+them technically plausible for the story, and use only numbers that are in the
+story. No invented percentages, no dates. No more than five lines.`,
+    suits: 'a system doing something: an outage, an agent, a bug, a benchmark, a model misbehaving. Never money or people.',
     closer: 'rotate',
     // The log block eats most of the budget, so the prose around it is short.
     words: { min: 35, max: 85 },
@@ -335,8 +389,11 @@ them technically plausible for the story. No more than five lines.`,
   'quote-reaction': {
     instruction: `Lead with a real quote from the story, in quotation marks,
 with who said it. Then one line of reaction. The reaction does the work, so
-keep it to a single sentence. If the story has no usable quote, use the most
-absurd exact phrase from it instead.`,
+keep it to a single sentence: your answer to the quote, the thing it gives
+away. Say it directly. Never narrate it ("This shows...", "This highlights...",
+"This reveals..."), and never describe how it made you feel. If the story has
+no usable quote, use the most revealing exact phrase from it instead.`,
+    suits: 'someone said something revealing, in a real quote in the article',
     closer: 'rotate',
     words: { min: 22, max: 60 },
     layouts: ['quote'],
@@ -349,7 +406,7 @@ Example shape: "We don't see this as a security risk." - the CTO, last week.`,
       {
         key: 'reaction',
         type: 'string',
-        description: 'one sentence reacting to the quote, under 20 words',
+        description: 'one sentence answering the quote, under 20 words, never starting "This shows/highlights/reveals"',
       },
       {
         key: 'closer',
@@ -374,8 +431,13 @@ A beat is a fragment, not a sentence. Three to six words. No verb is fine.
 AI agents set up messaging" is not, that is a press release.
 
 Use two or four beats, never three, and make them different lengths. Start
-each one lowercase. No bullet characters, no numbering, no two beats built the
-same way. Then one line of verdict.`,
+each one lowercase, but keep names capitalised: "OpenAI", never "openai". No
+bullet characters, no numbering, no two beats built the same way.
+
+The beats are there to set up the verdict. Order them so the last one makes
+the contradiction obvious, then the verdict says what it means. Beats that just
+retell the article in order are a summary, not a post.`,
+    suits: 'several things happened, and their order is the point: a contradiction, a reversal or an escalation',
     closer: 'rotate',
     words: { min: 25, max: 70 },
     // Beats are a sequence, and two-panel is the before/after shape.

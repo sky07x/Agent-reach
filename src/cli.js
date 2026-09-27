@@ -42,8 +42,17 @@ function showPost(post) {
   if (post.quality) {
     const mark = post.needsReview ? 'HELD' : 'ok';
     console.log(`Quality:        ${post.quality.score ?? 'n/a'}/5 ${mark} - ${post.quality.verdict}`);
+    const scores = Object.entries(post.quality.scores ?? {});
+    if (scores.length) console.log(`                ${scores.map(([name, value]) => `${name} ${value}`).join(' · ')}`);
     for (const problem of post.quality.problems ?? []) console.log(`                - ${problem}`);
   }
+  if (post.insight) {
+    console.log(`The point:      ${post.insight.point ?? post.insight.insight}`);
+    console.log(`Implication:    ${post.insight.implication ?? post.insight.whyItMatters}`);
+    for (const item of post.insight.keyEvidence ?? []) console.log(`Evidence:       ${item.fact}`);
+    console.log(`Substance:      ${post.insight.substance}/5 - ${post.insight.substanceReason}`);
+  }
+  if (post.quality?.thesis) console.log(`Judge's read:   this post argues that ${post.quality.thesis}`);
   console.log(`Why this story: ${post.curationReason || '(heuristic pick)'}`);
   console.log(`Angle:          ${post.angle || '(none given)'}`);
   console.log(`Frame:          ${post.frame ?? '(none)'}`);
@@ -100,6 +109,12 @@ async function runCommand() {
   }
 
   for (const post of result.posts) showPost(post);
+
+  // Stories turned down for having nothing in them are worth seeing: a run
+  // that rejects everything is telling you about the feed, not the writer.
+  for (const story of result.rejected ?? []) {
+    console.log(`Turned down: ${story.title}\n             ${story.reason}\n`);
+  }
 
   const usage = result.usage;
   console.log(`LLM: ${usage.calls} calls, ${usage.inputTokens} in / ${usage.outputTokens} out, about $${usage.costUsd.toFixed(4)}`);

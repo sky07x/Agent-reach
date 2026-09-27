@@ -2,7 +2,7 @@
 
 Reads TechCrunch, decides which AI/CS stories are actually worth posting about,
 writes them up in a Fireship-ish voice, draws a meme, and publishes to LinkedIn
-three times a week.
+twice a week (Tue and Thu).
 
 It is built as a loop, not a pipeline: it perceives (scrape + classify),
 reasons (curate, with a justification for each pick), acts (write, humanize,
@@ -28,7 +28,7 @@ Then:
 
 ```bash
 npm run dev                   # admin API on :3001 + cron scheduler
-npm test                      # 190 tests, no network needed
+npm test                      # 278 tests, no network needed
 npm run templates:preview     # render every meme template to data/out/
 npm run linkedin:auth         # one-time LinkedIn OAuth, writes .env for you
 ```
@@ -41,9 +41,10 @@ npm run linkedin:auth         # one-time LinkedIn OAuth, writes .env for you
 |---|---|---|---|
 | 1. Scrape | `src/scraper/` | TechCrunch RSS, falls back to HTML for the full body. Caches responses, respects robots.txt. | 0 |
 | 2. Classify | `src/classifier/` | Keyword scoring decides most articles for free. Only the grey zone goes to the model. | ~0.3 per article |
-| 3. Curate | `src/curator/` | Scores "meme-ability", shortlists 8, then one call ranks them and gives each pick an angle. | 1 per run |
-| 4. Write | `src/content-engine/` | One call returns 4 hooks and the post, in a shape the story can actually carry. | 1 per post |
-| 4b. Judge | `src/content-engine/quality.js` | Free structural checks, then one call scoring the post against its story. Below the floor it is **held**, not published. | ~1 per post |
+| 3. Curate | `src/curator/` | Scores "meme-ability", shortlists 8, then one call ranks them, gives each pick an angle, and ranks two spares. | 1 per run |
+| 4a. Read | `src/content-engine/insight.js` | Reads the full article: what happened, the specifics, what developers miss, the one point to make. A story with nothing to add is **turned down** and a spare is used. | 1-2 per post |
+| 4b. Write | `src/content-engine/` | Picks a shape and ending the story can carry, writes several first lines, rates them, then writes the post around the one that wins. | 3 per post |
+| 4c. Judge | `src/content-engine/quality.js` | Free checks, then one call scoring six named dimensions. Below the floor it is rewritten once, then **held**, and the next story gets the slot. | ~1 per post |
 | 5. Humanize | `src/humanizer/` | Strips AI tells mechanically, then one editor pass, then strips again. | 1 per post |
 | 6. Media | `src/meme-generator/` | Rotates square / portrait / text-only, then picks a template that suits the post. Drawn locally with sharp. | 0 |
 | 7. Publish | `src/publisher/` | LinkedIn API, or the console provider which saves to disk. | 0 |
@@ -64,22 +65,23 @@ not close.
 
 | | Hosted `gpt-4o-mini` | Self-hosted 7B on a VPS |
 |---|---|---|
-| Cost per post | about $0.002 | $0 marginal |
-| Cost per month | **about $0.03** | **about $15**, whether it posts or not |
-| Cost per year | about $0.40 | about $180 |
+| Cost per post | about $0.003 | $0 marginal |
+| Cost per month | **about $0.05** | **about $15**, whether it posts or not |
+| Cost per year | about $0.60 | about $180 |
 | Infra to run | none | you size, patch and monitor a box |
 | Output quality | better at sarcasm and concrete detail | noticeably blander at 7B |
 | Failure mode | rate limit, retried | box is down, nothing posts |
 
-Where the monthly $0.03 goes, at roughly 20 new articles per run:
+Where the monthly $0.05 goes, at roughly 20 new articles per run (the
+writing line is measured: 16 real stories cost $0.040 end to end):
 
 | Call | Per week | Cost per week |
 |---|---|---|
 | classify (only ambiguous articles) | ~18 | $0.0018 |
 | curate | 3 | $0.0017 |
-| write-post | 3 | $0.0021 |
+| insight, hooks, hook rating, write-post, judge | 15-18 | ~$0.008 |
 | humanize editor pass | 3 | $0.0010 |
-| | | **~$0.007/week** |
+| | | **~$0.012/week** |
 
 Self-hosting only wins if you are already paying for a GPU box for something
 else and can share it. If that changes, `LLM_PROVIDER=ollama` and
@@ -187,14 +189,14 @@ codebase hardcodes a feed URL, a schedule time, or a hashtag rule.
 ### Schedule
 
 ```bash
-SCHEDULE_CRON="30 9 * * 2,3,4"     # Tue/Wed/Thu 09:30
+SCHEDULE_CRON="30 9 * * 2,4"       # Tue/Thu 09:30
 SCHEDULE_TIMEZONE="Asia/Kolkata"
 ```
 
 Running locally, `node-cron` reads these directly. On Lambda, EventBridge is
 the scheduler and you set `ScheduleExpression` on the stack instead — note
 that **EventBridge cron is always UTC**, so the default there is
-`cron(0 4 ? * TUE,WED,THU *)`, which is the same 09:30 IST.
+`cron(0 4 ? * TUE,THU *)`, which is the same 09:30 IST.
 
 Change both if you change the schedule, or the local scheduler and the
 deployed one will disagree with each other.
@@ -339,31 +341,33 @@ combination is effectively out of reach.
 
 ### Choosing the hook
 
-The model writes four opening lines and
-[hook-scorer.js](src/content-engine/hook-scorer.js) picks one with plain
-rules. It is not a strict argmax, and that matters more than it sounds.
+The first line is a stage of its own, and it comes before the body:
 
-The scorer measures length, clichés, numbers and punctuation. It cannot tell
-whether a line is actually funny. Across the first seven real posts, **five
-had all four candidates scoring identically** — so the ranking decided
-nothing, and the tie always went to whichever line the model happened to list
-first, which is reliably its safest.
+1. The model writes four candidates, each in one of the opening styles, from
+   the story and the point the insight step found.
+2. [hook-scorer.js](src/content-engine/hook-scorer.js) scores each with plain
+   rules: length, clichés, a list of **generic hook** patterns ("Looks like…",
+   "Most of us think… X proves otherwise", "It's like…" with no subject), and
+   whether the line contains anything from *this* story - a name or a number.
+   A line that could sit on top of any post is marked down hard.
+3. One cheap call rates each candidate 1-5 for **specific curiosity**: does
+   it give a developer a concrete reason to read line two, without promising
+   more than the post says?
+4. The two scores are combined (the rating counts for more), and anything
+   within `content.hookJitter` of the top is a contender, picked at random.
+   The last post's opening style is marked down slightly, which is what now
+   keeps openings varied - styles no longer rotate one per post.
+5. The body is written **around the chosen line**. It used to be written in
+   the same reply as the hooks and stapled under whichever one won.
 
-So anything within `content.hookJitter` of the top score is a contender and
-one is picked at random. On those same seven posts that takes the number of
-hooks that could actually ship from one to 3.4 on average, while a genuinely
-weaker line still never wins — one post correctly narrowed to a single
-contender because its best hook really was better.
-
-An exact tie is broken at random even at `hookJitter: 0`, because a tie is
-precisely the case where the scorer has no opinion. A dry run marks the line
-that ran with `>` so you can see what it was choosing between.
+The rules keep a veto: a generic line the rater liked still loses to a
+specific one. A dry run marks the line that ran with `>` and shows both
+scores.
 
 ### Is the post any good?
 
-Everything else here checks structure — word counts, em-dashes, banned
-phrases, hashtag relevance, whether two posts share a skeleton. None of it can
-tell whether a post says anything. A post went out that proved it:
+Everything else here checks structure. None of it can tell whether a post
+says anything, and a post went out that proved it:
 
 > "But reasoning has always been something that we've relied on the frontier
 > model providers for." - Jayesh Govindarajan
@@ -371,38 +375,93 @@ tell whether a post says anything. A post went out that proved it:
 > Salesforce just gave spreadsheets a reason to take over.
 > This should be interesting.
 
-The story was that Salesforce built a reasoning model called Koa on Nvidia's
-Nemotron. The post mentions none of that, Salesforce is not a spreadsheet
-company, and the last line says nothing. It passed every check in the codebase.
+Four things now stand between a story and a publish.
 
-Three things now stand between a draft and a publish.
+**The story is read before anything is written.**
+[insight.js](src/content-engine/insight.js) reads the whole article and
+answers: what happened, what is specific about it, why it matters, what a
+developer skimming the headline would miss, and the one point the post should
+make. That point has to name something from the story; a trend statement ("AI
+agents are creating security risks") gets one retry and then the story is
+turned down. The writer is told the point and the specifics, and told not to
+summarise.
 
-**Shapes can decline a story.** Each shape declares what it needs —
-`quote-reaction` needs a quote worth reacting to, `terminal-log` needs a
-machine in the story, `receipts` needs more than one thing to have happened.
-The rotation walks only the shapes that fit. The post above exists because a
-content-blind queue handed `quote-reaction` to a story whose only quotes were
-bland corporate statements, and the shape then crowded out the joke the
-curator had already found.
+The step also scores *substance* 1-5, and below `content.insight.minSubstance`
+the story is turned down. Be aware that gpt-4o-mini scored sixteen of sixteen
+real stories 4/5, so in practice this rarely fires; the judge below is what
+really catches thin stories.
 
-**Free structural checks.** Filler closing lines ("this should be
-interesting", "time will tell"), quotes lifted from mid-sentence, a post that
-restates its own hook, a post that mentions nothing from its story. Instant,
-and they run before anything is spent.
+**The story picks its own format.** The insight step names the shapes that
+suit the story (each shape has a `suits` line), and each shape's own `fits()`
+check has to agree. Endings that need a disagreement (`argument-bait`,
+`dare`) only run when the insight found one. The rotations still choose among
+what is left, so they prevent repetition without overriding fit. Opening
+styles that need something (a `number-drop` needs a number) are only offered
+when the story has it.
 
-**One cheap call that reads the post against the story.** Scored 1-5 on two
-questions: can a reader tell what happened, and is there a real joke or
-opinion in it. Below `content.quality.minScore` the draft gets **one** rewrite
-told exactly what was wrong — same shape, same length, only the words change —
-and if it still fails it is saved with `status: "held"` and `needsReview`.
+**The point has to survive a "so what?" test.** The insight step works in
+order: what happened, the key evidence (each fact with the words from the
+article that support it, and any fact whose quote is not in the article is
+dropped), why it is interesting, the implication, **the one point** the
+reader should take away, and why this audience should care. It also says
+whether a comparison with another company is supported by the story. The
+point is then tested before anything is written: it must name something from
+the story, must not be a stock conclusion ("developers need to rethink…",
+"the competition is heating up"), must rest on at least one verified fact,
+and must fail the model's own name-swap test (rewritten for an unrelated AI
+story, it should stop making sense). One retry, then the story is turned
+down.
+
+The writer is told which lines are fact and which are interpretation, to
+hedge interpretation ("may", "probably"), never to state a cause the story
+does not, never to invent a rivalry, trend or reaction, and to build the post
+as hook, evidence, interpretation, point. It may not claim any first-person
+experience except what is in `AUTHOR_CONTEXT`, which is empty by default. The
+opening style that used to be called `fake-confession` is now
+`uncomfortable-truth`, and admits things about the work, never the author.
+
+**Free checks.** Filler endings (checked on the last line however the shape
+ended), generic hooks, numbers the story never gave (ratios like "seven in 10"
+count as 70%), lines cut mid-sentence, more than one question, analyst-report
+voice ("this shows", "highlights", "in a crowded market"), openings or
+endings copied from a recent post, and the point-level checks: empty
+reactions ("That's creepy", "Funny how that works"), generic conclusions,
+causes stated as fact that the story does not state, rivalries the story never
+describes, invented first-person experience, invented dates, and two or more
+claims that would fit under any AI story. They run before anything is spent, and
+again after the humanizer's editor pass: if the editor breaks a checked post,
+the checked version ships.
+
+**One call that reads the post against the story.** It scores eleven named
+dimensions - hook, specificity, insight, accuracy, voice, coherence, point,
+implication, information value, non-genericness and evidence/inference
+separation - and answers direct questions: finish "this post argues
+that…", would the post survive a name swap, does the hook set up the point,
+are there several unrelated ideas, and which lines are filler, empty
+reactions, unsupported claims or invented narratives. It can hold a post as
+"accurate but boring", "specific but no meaningful takeaway" or "the facts are
+correct, but the conclusion is generic". Point, information value and
+non-genericness have their own floor, `MIN_POINT_SCORE` (default 3): at 4
+far fewer posts pass. A post is held if any of
+hook, specificity, insight or accuracy is under `content.quality.minDimension`,
+if the average is under `minScore`, if it only summarises the story, if the
+hook is generic, or if two or more lines are filler. The judge has to say
+*why*, quoting the line, and that is what the rewrite is told.
+
+A post that fails gets **one** rewrite - same shape, same ending, same length,
+and the same first line if the judge had no problem with it. If it still
+fails it is saved as `held`, the story is not offered again, and the next
+spare story gets the slot, so a thin story does not cost the run its post.
 
 A held post is refused by the scheduled run and by `npm run publish`, which
 prints the verdict and offers `--force`. A gate that only logs is not a gate.
 
-Calibration matters more than strictness here. The first rubric scored the
-*good* post 2/5 because it read like a news-summary test, and a gate that
-blocks decent work gets switched off. It now scores that post 4/5 across
-repeated runs while still holding the bad one.
+**Choosing the review model.** `LLM_REVIEW_MODEL` sets the model for the calls
+that judge rather than write (insight, hook rating, judge). Measured on the
+same sixteen stories: with gpt-4o-mini reviewing, 12 passed; with gpt-4o
+reviewing, 6 passed and it was clearly stricter, for roughly ten times the
+cost. Using gpt-4o as the *writer* as well did not help - it invented more
+numbers, which the free checks caught.
 
 ### Hashtags
 
@@ -649,7 +708,7 @@ switch to x86, change **both** or the function will not start.
 npm test
 ```
 
-190 tests over the parts most likely to degrade quietly rather than crash:
+278 tests over the parts most likely to degrade quietly rather than crash:
 
 - **classifier scoring** — that AI stories pass, e-bike stories don't, exclude
   keywords actually bite, and `ai` doesn't match inside `email` or `chair`.
@@ -682,6 +741,11 @@ npm test
   contractions keep their capitals, and clean text is left alone.
 - **hook scoring** — that a specific hook beats a vague one, that clichés
   lose, and that jitter can reach a near-tie but never a genuinely weaker line.
+- **content engine** — that the story is read before hooks are written and
+  the body is written around the winning hook, that a thin or generic story
+  is turned down before any rotation moves, that only shapes the story suits
+  are reachable, that a held post hands its slot to the next story, and that
+  an editor pass which breaks a checked post is reverted.
 - **post shapes** — that no two shapes assemble into the same skeleton, that a
   shape which forbids a closing question never gets one, that a closer the
   model volunteers is dropped when the ending is `none`, that no shape can ask

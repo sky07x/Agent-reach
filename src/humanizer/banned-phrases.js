@@ -15,9 +15,14 @@ export const BANNED_PHRASES = [
   // Corporate LinkedIn voice
   { pattern: /\bexciting news\b[!.]?/gi, replaceWith: null, reason: 'influencer opener' },
   { pattern: /\bthrilled to (?:share|announce)\b/gi, replaceWith: null, reason: 'influencer opener' },
-  { pattern: /\bgame[- ]chang(?:er|ing)\b/gi, replaceWith: 'a big deal', reason: 'cliche' },
+  // The article is part of the match: "It's a game-changer" used to come out
+  // as "It's a a big deal", and shipped that way.
+  { pattern: /\b(?:an? )?game[- ]chang(?:er|ing)\b/gi, replaceWith: 'a big deal', reason: 'cliche' },
   { pattern: /\bin today's (?:fast[- ]paced |rapidly evolving )?world\b[,]?/gi, replaceWith: null, reason: 'cliche opener' },
-  { pattern: /\bthe future of\b/gi, replaceWith: 'where', reason: 'cliche' },
+  // Deleted rather than replaced. It used to become "where", which turned
+  // "Tabby challenges the future of conventional accounting" into "Tabby
+  // challenges where conventional accounting", and that shipped to review.
+  { pattern: /\bthe future of\s+/gi, replaceWith: null, reason: 'cliche' },
   { pattern: /\brevolutioniz(?:e|es|ing|ed)\b/gi, replaceWith: 'changes', reason: 'marketing word' },
   { pattern: /\bcutting[- ]edge\b/gi, replaceWith: 'new', reason: 'marketing word' },
   { pattern: /\bseamless(?:ly)?\b/gi, replaceWith: null, reason: 'marketing word' },
@@ -37,6 +42,19 @@ export const BANNED_PHRASES = [
   { pattern: /\bthat (?:being|said)[,]? said\b[,]?/gi, replaceWith: 'still,', reason: 'essay connective' },
   { pattern: /\bwhen it comes to\b/gi, replaceWith: 'with', reason: 'filler' },
   { pattern: /\bat the end of the day\b[,]?/gi, replaceWith: null, reason: 'filler' },
+
+  // Stock lines that sound like a take and say nothing. Each one turned up in
+  // the first real posts. Only phrases that delete cleanly are here; "who
+  // knew" and friends are caught earlier, by the quality gate, because
+  // deleting them leaves half a sentence.
+  { pattern: /\bhere'?s the thing[:,.]?\s*/gi, replaceWith: null, reason: 'stock transition' },
+  { pattern: /\bbut there'?s a catch[:,.]?\s*/gi, replaceWith: null, reason: 'stock transition' },
+  { pattern: /\bthis changes everything[.!]?/gi, replaceWith: null, reason: 'stock line' },
+  { pattern: /\bgood luck with that[.!]?/gi, replaceWith: null, reason: 'stock ending' },
+  { pattern: /\bwelcome to the future[.!,]?/gi, replaceWith: null, reason: 'stock ending' },
+  { pattern: /\bplot twist[:,.!]?\s*/gi, replaceWith: null, reason: 'stock transition' },
+  { pattern: /\bjust a thought[.!]?/gi, replaceWith: null, reason: 'stock ending' },
+  { pattern: /\bonly time will tell[.!]?/gi, replaceWith: null, reason: 'stock ending' },
 
   // Hedging that drains the opinion out of a take
   { pattern: /\bit could be argued that\b/gi, replaceWith: null, reason: 'hedge' },

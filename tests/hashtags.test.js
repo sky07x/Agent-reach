@@ -94,10 +94,10 @@ test('an unknown frame falls back to everything, not to nothing', () => {
 /* --- relevance ------------------------------------------------------------ */
 
 test('the writer outranks the subject, which outranks core', () => {
-  const found = relevantTags({ modelTags: ['#Rust'], text: 'A Kubernetes cluster outage' });
+  const found = relevantTags({ modelTags: ['#Observability'], text: 'A Kubernetes cluster outage' });
 
-  assert.equal(found.get('#rust').relevance, RELEVANCE.modelChose);
-  assert.equal(found.get('#gpu').relevance, RELEVANCE.subject, 'infra, because the story says so');
+  assert.equal(found.get('#observability').relevance, RELEVANCE.modelChose);
+  assert.equal(found.get('#cloud').relevance, RELEVANCE.subject, 'infra, because the story says so');
   assert.equal(found.get('#softwareengineering').relevance, RELEVANCE.core);
 });
 
@@ -438,4 +438,53 @@ test('an exact set does not come back inside the set cooldown', () => {
     history.unshift(tags);
     history.length = Math.min(history.length, config.content.hashtagHistory);
   }
+});
+
+/* --- narrow tags need evidence -------------------------------------------- */
+
+test('a narrow tag the story never mentions is dropped, even when the writer picks it', () => {
+  // The real set from the first posts: an AI safety story tagged like a
+  // tutorial on retrieval pipelines.
+  const { tags } = choose({
+    modelTags: ['#PromptEngineering', '#RAG', '#CodeQuality'],
+    frame: 'irony',
+    text: 'OpenAI, Anthropic, Google have been in talks on AI safety for weeks',
+    count: 3,
+  });
+
+  assert.ok(!tags.includes('#RAG'), 'nothing in the story is about retrieval');
+  assert.ok(!tags.includes('#PromptEngineering'), 'nothing in the story is about prompts');
+});
+
+test('a narrow tag the story does mention is still the writer\'s to pick', () => {
+  const { tags } = choose({ modelTags: ['#Rust'], frame: 'shipped', text: 'Cloudflare rewrote its proxy in Rust', count: 3 });
+
+  assert.ok(tags.includes('#Rust'));
+});
+
+test('subjects are whole words, so "trust" is not Rust and "capital" is not an API', () => {
+  const found = relevantTags({ text: 'Investors said they trust the founders and their capital plan' });
+
+  assert.ok(!found.has('#rust'), 'trust is not Rust');
+  assert.ok(!found.has('#opensource'), 'nothing here is about code');
+  assert.ok(!found.has('#llm'), '"said" is not "ai"');
+});
+
+test('a company tag the writer adds is kept when the story names the company', () => {
+  const { tags } = choose({ modelTags: ['#WhatsApp', '#AIInnovation'], frame: 'shipped', text: 'Meta now lets AI agents handle WhatsApp Business setup', count: 3 });
+
+  assert.ok(tags.includes('#WhatsApp'), 'names something in the story');
+  assert.ok(!tags.includes('#AIInnovation'), 'an invented category tag names nothing');
+});
+
+test('the broad AI tags need a reason too, so they stop riding on everything', () => {
+  // A grocery app with an assistant is not a story about language models or training.
+  const found = relevantTags({ modelTags: ['#LLM', '#MachineLearning', '#GenAI'], text: 'Shipt becomes the latest delivery app with an AI shopping assistant' });
+
+  assert.ok(!found.has('#llm'));
+  assert.ok(!found.has('#machinelearning'));
+  assert.ok(!found.has('#genai'));
+
+  const model = relevantTags({ modelTags: ['#LLM'], text: 'Salesforce built a reasoning model called Koa on Nemotron' });
+  assert.ok(model.has('#llm'), 'a story about a model can carry it');
 });

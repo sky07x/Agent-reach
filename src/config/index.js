@@ -211,10 +211,60 @@ export const config = {
     // failure needs a semantic check, so this one costs a call.
     quality: {
       useLlmJudge: true,
-      // Out of 5. Three is "accurate, mildly amusing, forgettable", which is
-      // the floor for something going out under your own name.
+      // Out of 5, averaged over the judge's six dimensions. Three is
+      // "accurate, specific, forgettable", the floor for something going out
+      // under your own name.
       minScore: 3,
+      // And each of hook, specificity, insight and accuracy has to clear this
+      // on its own. An average let a post that said nothing through on the
+      // strength of a tidy voice.
+      minDimension: 3,
+      // The floor for point, information value and non-genericness alone.
+      // 3 is "acceptable". Measured on real stories, most posts that pass at
+      // 3 are specific and correct but only mildly interesting; 4 ("a clear
+      // point I would stop for") holds most of them, so far fewer posts go
+      // out. That trade is yours to make, which is why it is its own knob.
+      minPointDimension: Number(process.env.MIN_POINT_SCORE) || 3,
     },
+
+    // Read the story before writing about it. See content-engine/insight.js.
+    insight: {
+      enabled: true,
+      // Out of 5: how much there is to say beyond the headline. Below this
+      // the story is turned down and the next pick is tried instead. Two is
+      // "one thin detail, any post would be the headline again".
+      minSubstance: 3,
+      // How much of the article the insight step reads. The curator only
+      // ever saw 300 characters of summary, which is why its angles were
+      // puns: the interesting part of a story is rarely in its first line.
+      maxBodyChars: 4000,
+      // Extra stories the curator ranks, so a rejected one has a stand-in.
+      // Without these, turning a thin story down means posting nothing.
+      spareStories: 3,
+      // At least this many facts the insight step cites must actually be
+      // found in the article, or the point is resting on nothing.
+      minEvidence: 1,
+    },
+
+    // The calls that JUDGE rather than write - reading the story, rating the
+    // hooks, scoring the post - can use a stronger model than the writer.
+    // Empty means the same model as everything else. On the first real runs
+    // gpt-4o-mini scored every one of sixteen stories 4/5 for substance, so
+    // its self-assessment cannot be trusted to turn anything down; a bigger
+    // model here costs about a cent a post.
+    reviewModel: process.env.LLM_REVIEW_MODEL || '',
+
+    // Things the author has really done, in plain sentences. The ONLY
+    // first-person experience a post may mention. Empty means none at all:
+    // the writer is told so, and a post that claims one is held.
+    authorContext: process.env.AUTHOR_CONTEXT || '',
+
+    // How many recent posts the writer is shown, and the free checks compare
+    // against, so it stops opening and closing every post the same way.
+    recentPostsShown: 6,
+    // A second cheap call that rates the hook candidates for specific
+    // curiosity. The rules alone cannot tell a flat line from a good one.
+    rateHooks: true,
 
     hashtagCount: { min: 3, max: 5 },
     // How many tags a post gets, rotated like everything else. Twelve of the
@@ -263,12 +313,14 @@ export const config = {
       'aside',
       'none',
     ],
-    // Rotate openers too.
+    // The opening styles hook candidates are written in. These no longer
+    // rotate one per post: every candidate set mixes them, the best line
+    // wins, and the last post's style is marked down to keep them varied.
     openingStyles: [
       'blunt-claim',
       'oh-no-observation',
       'number-drop',
-      'fake-confession',
+      'uncomfortable-truth',
       'dry-comparison',
     ],
   },
@@ -332,11 +384,11 @@ export const config = {
 
   /* --- Stage 7: when and where it goes out -------------------------------- */
   schedule: {
-    // Default: Tue/Wed/Thu 09:30 IST. Mornings on those days do well with a
+    // Default: Tue/Thu 09:30 IST. Mornings on those days do well with a
     // technical LinkedIn audience in India + early Europe.
-    cron: process.env.SCHEDULE_CRON || '30 9 * * 2,3,4',
+    cron: process.env.SCHEDULE_CRON || '30 9 * * 2,4',
     timezone: process.env.SCHEDULE_TIMEZONE || 'Asia/Kolkata',
-    postsPerWeek: readNumber(process.env.POSTS_PER_WEEK, 3),
+    postsPerWeek: readNumber(process.env.POSTS_PER_WEEK, 2),
   },
 
   publisher: {

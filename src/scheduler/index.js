@@ -6,7 +6,7 @@
  * expression. Both read the schedule from config, so there is one source of
  * truth for when posts go out.
  *
- * Default is Tue/Wed/Thu 09:30 Asia/Kolkata, which is three posts a week.
+ * Default is Tue/Thu 09:30 Asia/Kolkata, which is two posts a week.
  */
 
 import cron from 'node-cron';
@@ -14,7 +14,7 @@ import { createLogger } from '../lib/logger.js';
 
 const log = createLogger('scheduler');
 
-/** Turn "30 9 * * 2,3,4" into something a person can read in a log line. */
+/** Turn "30 9 * * 2,4" into something a person can read in a log line. */
 export function describeCron(expression) {
   const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const [minute, hour, , , weekdays] = expression.split(/\s+/);

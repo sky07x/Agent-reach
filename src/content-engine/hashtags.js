@@ -88,10 +88,82 @@ export const SUBJECT_MATCHERS = {
   ai: [
     'ai', 'artificial intelligence', 'llm', 'model', 'models', 'gpt', 'chatgpt',
     'openai', 'anthropic', 'claude', 'gemini', 'agent', 'agents', 'agentic',
-    'inference', 'training', 'fine-tune', 'prompt', 'rag', 'hallucinat',
-    'machine learning', 'neural',
+    'inference', 'training', 'fine-tune', 'prompt', 'rag', 'hallucination',
+    'hallucinations', 'hallucinated', 'hallucinating', 'machine learning',
+    'neural',
   ],
 };
+
+/**
+ * Tags that name something specific, and so need that thing in the story.
+ *
+ * Being in a relevant group was enough to qualify, and the model's own picks
+ * outranked everything. Between them that gave:
+ *
+ *   "OpenAI, Anthropic, Google in talks on AI safety"  ->  #PromptEngineering #RAG
+ *   "Superhuman acquires Fathom"                       ->  #Python #Rust #TypeScript
+ *   "The AI graveyard"                                 ->  #Kubernetes #GPU
+ *
+ * A story about AI is not a story about RAG. These tags are only eligible,
+ * whoever suggests them, when the story mentions what they name.
+ */
+export const NARROW_TAGS = {
+  '#RAG': ['rag', 'retrieval', 'vector database', 'embeddings'],
+  '#PromptEngineering': ['prompt', 'prompts', 'prompting', 'system prompt'],
+  '#PromptInjection': ['prompt injection', 'jailbreak', 'jailbreaks', 'injection'],
+  '#Python': ['python'],
+  '#TypeScript': ['typescript', 'javascript'],
+  '#Rust': ['rust'],
+  '#Kubernetes': ['kubernetes', 'k8s'],
+  '#GPU': ['gpu', 'gpus', 'nvidia', 'chip', 'chips', 'accelerator'],
+  '#Observability': ['observability', 'monitoring', 'tracing', 'logs', 'outage', 'downtime'],
+  '#OpenSource': ['open source', 'open-source', 'open-sources', 'open-sourced', 'open-weight', 'github'],
+  '#AIAgents': ['agent', 'agents', 'agentic'],
+  // The three broad AI tags were what was left once the narrow ones needed
+  // evidence, so they rode on almost every post. They need a reason too.
+  '#LLM': ['llm', 'llms', 'language model', 'language models', 'model', 'models', 'chatgpt', 'claude', 'gemini', 'gpt', 'chatbot', 'reasoning'],
+  '#GenAI': ['generative', 'genai', 'generated', 'ai-generated', 'image', 'images', 'video', 'audio', 'content', 'photo', 'photos'],
+  '#MachineLearning': ['machine learning', 'training', 'trained', 'neural', 'model', 'models', 'dataset', 'data', 'distill', 'distillation'],
+  '#VentureCapital': ['funding', 'raises', 'raised', 'investors', 'investor', 'venture', 'valuation', 'seed round', 'series a', 'series b'],
+  '#AppSec': ['vulnerability', 'exploit', 'cve', 'appsec', 'injection', 'patch'],
+  // The craft tags were the next favourites once the AI ones were capped:
+  // #TechnicalDebt on a story about Jensen Huang's phone call.
+  '#TechnicalDebt': ['technical debt', 'tech debt', 'legacy', 'refactor', 'rewrite', 'migration', 'deprecated'],
+  '#CodeQuality': ['code quality', 'bug', 'bugs', 'code review', 'testing', 'tests', 'linter'],
+  '#DeveloperExperience': ['developer experience', 'developers', 'developer', 'dx', 'tooling', 'sdk', 'api', 'docs', 'ide'],
+};
+
+/**
+ * Whole-word match. The subject check used plain includes(), so "trust"
+ * meant #Rust, "capital" meant an API story, "storage" meant RAG and every
+ * story with "said" in it was about AI.
+ */
+function mentions(text, phrase) {
+  const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, 'i').test(text);
+}
+
+const KNOWN = new Set(Object.values(HASHTAG_GROUPS).flat().map((tag) => tag.toLowerCase()));
+
+/** "#WhatsApp" names "WhatsApp Business"; "#OpenAI" names "OpenAI's". */
+function namesSomethingIn(tag, text) {
+  if (!String(text ?? '').trim()) return true;
+
+  const squash = (value) => String(value).toLowerCase().replace(/[^a-z0-9]/g, '');
+  return squash(text).includes(squash(tag));
+}
+
+/**
+ * Does the story say what this tag names? Broad tags always pass, and so
+ * does everything when there is no story text to check against: an absence
+ * of text is not evidence against a tag.
+ */
+export function hasEvidence(tag, text) {
+  if (!String(text ?? '').trim()) return true;
+
+  const words = Object.entries(NARROW_TAGS).find(([narrow]) => narrow.toLowerCase() === tag.toLowerCase())?.[1];
+  return !words || words.some((word) => mentions(text, word));
+}
 
 /**
  * Which groups a frame suggests, used ONLY when the story's own words say
@@ -166,6 +238,15 @@ export function relevantTags({ modelTags = [], frame, text = '' }) {
     const tag = normalizeTag(rawTag);
     if (!tag) return;
 
+    // Relevance first, whoever is asking. A narrow tag the story never
+    // mentions is not relevant, even when the writer picked it.
+    if (!hasEvidence(tag, haystack)) return;
+
+    // A tag the writer invented has to name something in the story. That is
+    // what lets #Salesforce or #WhatsApp through, which is where real variety
+    // comes from, and keeps #AIInnovation-style filler out.
+    if (relevance === RELEVANCE.modelChose && !KNOWN.has(key(tag)) && !namesSomethingIn(tag, haystack)) return;
+
     const existing = found.get(key(tag));
 
     // A tag can qualify twice. Keep the strongest reason.
@@ -176,7 +257,7 @@ export function relevantTags({ modelTags = [], frame, text = '' }) {
 
   // What the story says it is about, in its own words.
   const subjects = Object.entries(SUBJECT_MATCHERS)
-    .filter(([, words]) => words.some((word) => haystack.includes(word)))
+    .filter(([, words]) => words.some((word) => mentions(haystack, word)))
     .map(([group]) => group);
 
   for (const group of subjects) {
@@ -338,6 +419,8 @@ export function chooseHashtags({
 }
 
 export default {
+  NARROW_TAGS,
+  hasEvidence,
   HASHTAG_GROUPS,
   FRAME_GROUPS,
   SUBJECT_MATCHERS,

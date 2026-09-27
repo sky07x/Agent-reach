@@ -106,13 +106,17 @@ export function createStore(config, { driver } = {}) {
       return (await (await open()).list(COLLECTIONS.articles)).sort(byNewest);
     },
 
-    /** Relevant, not yet turned into a post, and still recent enough. */
+    /**
+     * Relevant, not yet turned into a post, not turned down as too thin to
+     * post about, and still recent enough.
+     */
     async listPostableArticles({ maxAgeDays }) {
       const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
 
       return (await this.listArticles()).filter((article) => (
         article.classification?.relevant
         && !article.usedInPostId
+        && !article.rejectedForPost
         && new Date(article.publishedAt).getTime() >= cutoff
       ));
     },

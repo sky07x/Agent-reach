@@ -3,7 +3,7 @@
  *
  * Two handlers, because they do genuinely different things:
  *
- *   scheduled  EventBridge fires this three times a week. It runs one full
+ *   scheduled  EventBridge fires this twice a week. It runs one full
  *              cycle and exits. No cron inside the process: EventBridge is
  *              the scheduler, node-cron is not used here.
  *
