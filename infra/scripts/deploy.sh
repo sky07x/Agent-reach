@@ -74,7 +74,8 @@ sam deploy \
     "OpenAiApiKey=$OPENAI_API_KEY" \
     "LinkedInAccessToken=$LINKEDIN_ACCESS_TOKEN" \
     "LinkedInMemberId=$LINKEDIN_MEMBER_ID" \
-    "AdminApiKey=$ADMIN_API_KEY"
+    "AdminApiKey=$ADMIN_API_KEY" \
+    "ScheduleExpression=\"${SCHEDULE_EXPRESSION:-cron(0 4 ? * TUE,THU *)}\""
 
 echo
 echo "Done. Admin URL:"
