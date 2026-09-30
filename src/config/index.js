@@ -33,6 +33,10 @@ function readNumber(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+// Read once, used by both the writer and (by default) the reviewer.
+const writerModel = process.env.LLM_WRITER_MODEL
+  ?? ((process.env.LLM_PROVIDER || 'openai') === 'openai' ? 'gpt-5.4' : '');
+
 export const config = {
   agentName: 'linkedin-tech-meme-agent',
 
@@ -185,8 +189,8 @@ export const config = {
   content: {
     // A hard ceiling across every shape. The per-post target comes from the
     // shape's own range and the length mood below, and is always well under
-    // this - nothing here should ever reach 200 words.
-    maxWords: 200,
+    // this - nothing here should ever reach 240 words.
+    maxWords: 240,
     // How long a post runs, rotated per post. Every post landing at the same
     // length is quieter than a repeated closing question, but a feed where
     // every entry fills the same amount of screen still reads as machine-paced.
@@ -252,7 +256,15 @@ export const config = {
     // gpt-4o-mini scored every one of sixteen stories 4/5 for substance, so
     // its self-assessment cannot be trusted to turn anything down; a bigger
     // model here costs about a cent a post.
-    reviewModel: process.env.LLM_REVIEW_MODEL || '',
+    reviewModel: process.env.LLM_REVIEW_MODEL || writerModel,
+
+    // The model that WRITES: the hooks, the post, the editor pass and the
+    // picture. This is the single biggest lever on whether a post reads like
+    // a person. gpt-4o-mini follows every rule here and still writes like a
+    // press release with the adjectives removed; the gpt-5 family writes
+    // like someone who has an opinion. At two posts a week the difference is
+    // a few cents a month. Empty means LLM_MODEL for everything, as before.
+    writerModel,
 
     // Things the author has really done, in plain sentences. The ONLY
     // first-person experience a post may mention. Empty means none at all:
@@ -294,30 +306,52 @@ export const config = {
     // The skeleton of the post, rotated one per post. Varying only the first
     // line while every post kept the same hook/body/question/hashtags frame is
     // what made the feed look templated. See content-engine/shapes.js.
+    //
+    // The first five are the ones an engineer's audience saves and shares:
+    // how it works, what the headline gets wrong, what to do about it, the
+    // story with its turn, and the numbers. The short ones stay in for
+    // rhythm, so the feed is not five explainers in a row.
+    //
+    // slow-burn-rant and terminal-log still exist but are out of the
+    // rotation: the rant came out as a staircase of filler lines, and the
+    // fake logs needed invented timestamps to look real.
     postShapes: [
+      'breakdown',
+      'contrarian',
+      'builder-notes',
+      'story-mode',
+      'numbers',
       'classic-take',
-      'two-line-zinger',
-      'slow-burn-rant',
-      'terminal-log',
       'quote-reaction',
+      'two-line-zinger',
       'receipts',
     ],
     // How a post ends, rotated separately again. 'none' is in here on purpose:
     // every post closing with a question was the loudest sign of a template.
     // Shapes that end themselves (the zinger, the rant) skip this rotation.
+    //
+    // Only two of the eight ask anything, and practitioner-question asks
+    // about the reader's own work rather than for their opinion, which is
+    // what gets a real answer instead of "great post".
     closerStyles: [
-      'argument-bait',
+      'takeaway',
+      'practitioner-question',
       'flat-verdict',
-      'prediction',
-      'dare',
-      'aside',
       'none',
+      'prediction',
+      'aside',
+      'argument-bait',
+      'dare',
     ],
     // The opening styles hook candidates are written in. These no longer
     // rotate one per post: every candidate set mixes them, the best line
     // wins, and the last post's style is marked down to keep them varied.
     openingStyles: [
       'blunt-claim',
+      'curiosity-gap',
+      'contrarian-read',
+      'stakes',
+      'scene',
       'oh-no-observation',
       'number-drop',
       'uncomfortable-truth',
@@ -342,7 +376,26 @@ export const config = {
     //
     // Ordered so the two picture treatments are not adjacent, and text-only
     // lands roughly every third post.
-    treatments: ['meme-square', 'text-only', 'meme-portrait'],
+    //
+    // The names say "meme" for history's sake. What goes inside the frame is
+    // now planned from the post (a diagram, a chart, a cheat sheet, a code
+    // window...), see content-engine/visual-planner.js. Portrait comes up
+    // most because it takes the most of a phone screen, and text-only is one
+    // post in five: often enough to read as a person, not so often that the
+    // feed is mostly words.
+    treatments: ['meme-portrait', 'meme-square', 'meme-portrait', 'text-only', 'meme-square'],
+
+    // Planned visuals. See content-engine/visual-planner.js.
+    visuals: {
+      enabled: readBool(process.env.VISUALS_ENABLED, true),
+      // Your name or handle, bottom-left of every card, the way creators
+      // sign their graphics. Empty = unsigned.
+      handle: process.env.VISUAL_HANDLE ?? '',
+      // Bottom-right. Data from a story should say where it came from.
+      sourceLabel: 'Source: TechCrunch',
+      // How many recent posts' picture types to steer away from.
+      recentTypes: 3,
+    },
 
     // How the template is chosen. Selection is deterministic: every candidate
     // is scored and the best wins, so it cannot draw the same one twice by

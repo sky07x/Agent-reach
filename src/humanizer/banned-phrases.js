@@ -32,6 +32,17 @@ export const BANNED_PHRASES = [
   { pattern: /\ba testament to\b/gi, replaceWith: 'proof of', reason: 'classic LLM phrase' },
   { pattern: /\bin the (?:realm|landscape) of\b/gi, replaceWith: 'in', reason: 'classic LLM phrase' },
   { pattern: /\bnavigating the\b/gi, replaceWith: 'dealing with the', reason: 'classic LLM phrase' },
+  { pattern: /\bin the ever[- ](?:evolving|changing) (?:world|space|field) of\b/gi, replaceWith: 'in', reason: 'classic LLM phrase' },
+  { pattern: /\bsupercharg(?:e|es|ed|ing)\b/gi, replaceWith: 'speed up', reason: 'marketing word' },
+  { pattern: /\bunleash(?:es|ed|ing)?\b/gi, replaceWith: 'release', reason: 'marketing word' },
+  { pattern: /\bempower(?:s|ed|ing)?\b/gi, replaceWith: 'let', reason: 'marketing word' },
+  { pattern: /\blet'?s dive (?:in|into it)[.!:]?\s*/gi, replaceWith: null, reason: 'creator filler' },
+  // The announcement before the point. Deleting it leaves the point, which
+  // is what the sentence should have been in the first place.
+  { pattern: /\b(?:the|what'?s) (?:key|real|important|interesting|crucial) (?:detail|point|change|part|story|takeaway|thing)(?: here)? is(?: that)?[:,]?\s+/gi, replaceWith: null, reason: 'announces the point' },
+  { pattern: /\bthe point (?:here )?is(?: that)?[:,]?\s+/gi, replaceWith: null, reason: 'announces the point' },
+  { pattern: /\bwhat matters (?:here )?is(?: that)?[:,]?\s+/gi, replaceWith: null, reason: 'announces the point' },
+  { pattern: /\blet'?s break (?:it|this) down[.!:]?\s*/gi, replaceWith: null, reason: 'creator filler' },
 
   // Essay-bot connectives
   { pattern: /\bmoreover\b[,]?/gi, replaceWith: null, reason: 'essay connective' },
@@ -67,10 +78,14 @@ export const BANNED_PHRASES = [
   { pattern: /\blet me know in the comments\b[.!]?/gi, replaceWith: null, reason: 'generic CTA' },
   { pattern: /\bdrop a comment\b[.!]?/gi, replaceWith: null, reason: 'generic CTA' },
   { pattern: /\bfollow me for more\b[.!]?/gi, replaceWith: null, reason: 'generic CTA' },
+  { pattern: /\bfollow for more\b[.!]?/gi, replaceWith: null, reason: 'generic CTA' },
+  { pattern: /\b(?:♻️\s*)?repost (?:this )?if\b[^.\n]*[.!]?/gi, replaceWith: null, reason: 'generic CTA' },
+  { pattern: /\bsave this (?:post )?for later\b[.!]?/gi, replaceWith: null, reason: 'generic CTA' },
+  { pattern: /^thoughts\?$/gim, replaceWith: null, reason: 'generic CTA' },
   { pattern: /\bagree\?$/gim, replaceWith: null, reason: 'generic CTA' },
 
   // Emoji that scream LinkedIn influencer
-  { pattern: /🚀|🔥|💡|🎯|✨|👇|🙌/g, replaceWith: null, reason: 'influencer emoji' },
+  { pattern: /🚀|🔥|💡|🎯|✨|👇|🙌|🧵|🚨|📈|💯/g, replaceWith: null, reason: 'influencer emoji' },
 ];
 
 /**

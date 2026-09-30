@@ -45,6 +45,16 @@ test('shapes do not all produce the same skeleton', () => {
     logLines: ['ERROR: agent exited 137', 'at shell.run(index.js:42)'],
     reaction: 'they said this out loud, on a stage',
     beats: ['funding closed friday', 'the demo broke monday'],
+    setup: 'what we are looking at',
+    steps: ['the request comes in', 'the model routes it'],
+    insight: 'the part people miss',
+    turn: 'the detail that changes it',
+    meaning: 'what it means',
+    context: 'one line of context',
+    notes: ['pin the version', 'log the tool calls'],
+    scenes: ['it shipped on monday', 'it broke on tuesday'],
+    lesson: 'read the changelog',
+    figures: ['$4B raised', '12 engineers'],
   };
 
   const built = Object.keys(POST_SHAPES).map((name) =>

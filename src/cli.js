@@ -61,9 +61,9 @@ function showPost(post) {
   console.log(`Ends with:      ${post.closerStyle ?? '(the shape ends itself)'}`);
   console.log(`Length:         ${post.words} words, ${post.lengthMood} (aimed for ${post.targetWords})`);
   console.log(`Media:          ${post.mediaTreatment ?? 'meme-square'}`);
-  console.log(post.memePath
-    ? `Meme template:  ${post.memeTemplate} (${post.memeLayout} layout)\nMeme image:     ${post.memePath}`
-    : 'Meme template:  none, this post is text-only');
+  if (!post.memePath) console.log('Image:          none, this post is text-only');
+  else if (post.visual) console.log(`Visual:         ${post.visualType} - ${post.visual.title}\nImage:          ${post.memePath}`);
+  else console.log(`Meme template:  ${post.memeTemplate} (${post.memeLayout} layout)\nImage:          ${post.memePath}`);
   line();
   console.log(post.text);
   line();
@@ -255,7 +255,7 @@ To actually put this on your LinkedIn profile:
   const result = await provider.publish({
     text: post.text,
     imageBuffer,
-    imageAltText: `Meme about: ${post.articleTitle}`,
+    imageAltText: post.imageAltText || `Image for a post about: ${post.articleTitle}`,
   });
 
   await agent.store.updatePost(post.id, {

@@ -16,6 +16,7 @@ import { createCurator } from './curator/index.js';
 import { createContentEngine } from './content-engine/index.js';
 import { createHumanizer } from './humanizer/index.js';
 import { createMemeGenerator } from './meme-generator/index.js';
+import { createVisualPlanner } from './content-engine/visual-planner.js';
 import { createPublisher } from './publisher/index.js';
 
 const log = createLogger('agent');
@@ -81,6 +82,7 @@ export async function createAgent(overrides = {}) {
     contentEngine: overrides.contentEngine ?? createContentEngine({ config, llm, store }),
     humanizer: overrides.humanizer ?? createHumanizer({ config, llm }),
     memeGenerator: overrides.memeGenerator ?? createMemeGenerator({ config, store }),
+    visualPlanner: overrides.visualPlanner ?? createVisualPlanner({ config, llm, store }),
     analytics: overrides.analytics ?? createAnalytics({ store, publisher }),
   };
 

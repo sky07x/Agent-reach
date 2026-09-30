@@ -72,22 +72,50 @@ Work through these in order. Each builds on the one before.
                      company or product, or gives the evidence for one. Two
                      products in the same news cycle are not a rivalry.
   tension            the best counter-argument to the point, or "".
+  commonRead         what a developer skimming only the headline would
+                     conclude, in one sentence, IF a detail in the article
+                     points somewhere else. "" if the headline is fair.
+  mechanism          how the thing actually works, as 2 to 5 short steps in
+                     the order they happen, ONLY as far as the article
+                     explains it. [] if the article does not say how it
+                     works. Never fill gaps with how such things usually work.
+  numbers            the telling figures, 0 to 6 of them, each copied from
+                     the article: [{"label": "what it counts, 2-6 words",
+                     "value": 500000000, "display": "$500M",
+                     "quote": "the exact words from the article"}]
+                     value is a plain number for charting. Skip dates and
+                     years. Only numbers that are comparable belong together.
+  builderAngle       one sentence: what someone building software should do,
+                     check or avoid differently because of this story. "" if
+                     nothing.
   soWhat             the test that decides whether this story gets a post:
                      {"readerLearns": "what the reader knows afterwards that the headline did not tell them",
                       "sameForAnotherStory": "your point, rewritten for an unrelated AI launch by swapping only the names and numbers",
-                      "stillMakesSense": true if that rewritten point is still a sensible claim}
-                     Be honest. If the point still makes sense about another
-                     story, it is not a point about this one.
+                      "stillMakesSense": true ONLY if the rewritten point is just as
+                      TRUE and just as INTERESTING for most other AI launches,
+                      i.e. your point is really a trend statement}
+                     Nearly any sharp point can be abstracted into a sentence
+                     that is still grammatical; that is not the test. The
+                     test is whether the insight came from this story's
+                     specifics. "Generative AI used before the shot, as pose
+                     choreography, instead of editing after it" came from the
+                     story: false. "Enterprises want AI agents to be safe"
+                     would be true of anything: true.
   shapes             the post formats below that would genuinely suit this
                      story, best first, at most three. Use the exact names.
-  substance          1-5, how much there is to say beyond the headline:
+  substance          1-5, how much MATERIAL the article gives a writer beyond
+                     the headline: specifics, numbers, a mechanism, a quote, a
+                     consequence. It scores the story, not how original your
+                     point is.
                        1  a press release. Nothing to add.
                        2  one thin detail. Any post would be the headline again.
                        3  a real detail and a real consequence.
-                       4  a non-obvious point most people will miss, backed by
-                          the evidence.
+                       4  several telling specifics, or a mechanism explained,
+                          and a non-obvious point they support.
                        5  a genuinely surprising story with a clear argument.
-                     Most stories are 2 or 3.
+                     These stories were already picked as the best of the
+                     week, so 3 is ordinary here. A story with several
+                     specific numbers or a described mechanism is at least 3.
   substanceReason    one sentence explaining the score.
 
 THESE ARE NOT POINTS. They are true of almost every AI story:
@@ -143,6 +171,18 @@ export function quoteIsInArticle(quote, article) {
 }
 
 /**
+ * Is this figure, as displayed, in the article? "$500M" matches "$500
+ * million", "93%" matches "93 percent". Compared on the digits and the
+ * scale, not the spelling.
+ */
+export function displayIsInArticle(display, article) {
+  const source = `${article?.title ?? ''} ${article?.summary ?? ''} ${article?.body ?? ''}`.replace(/,/g, '');
+  const digits = String(display ?? '').replace(/,/g, '').match(/\d+(?:\.\d+)?/);
+  if (!digits) return false;
+  return new RegExp(`(^|[^\\d.])${digits[0].replace('.', '\\.')}(?![\\d]|\\.\\d)`).test(source);
+}
+
+/**
  * Coerce whatever the model sent into the shape the rest of the engine uses.
  * A model that returns a string where a list was asked for is a normal
  * Tuesday, so cope rather than throw.
@@ -175,6 +215,20 @@ export function normalizeInsight(raw, shapeNames = Object.keys(POST_SHAPES), art
   const audienceRelevance = text(raw?.audienceRelevance ?? raw?.whatDevsMiss);
   const whyInteresting = text(raw?.whyInteresting ?? raw?.surprising);
 
+  // A figure is only kept when its words are in the article AND its value
+  // can actually be found there. A chart is the most believable thing a post
+  // can carry, which makes a wrong number on one the most damaging.
+  const numbers = list(raw?.numbers)
+    .map((item) => ({
+      label: text(item?.label),
+      value: Number(item?.value),
+      display: text(item?.display ?? item?.value),
+      quote: text(item?.quote),
+    }))
+    .filter((item) => item.label && Number.isFinite(item.value) && item.display)
+    .filter((item) => !article || (quoteIsInArticle(item.quote || item.display, article) && displayIsInArticle(item.display, article)))
+    .slice(0, 6);
+
   return {
     whatHappened: text(raw?.whatHappened),
     keyEvidence,
@@ -188,6 +242,10 @@ export function normalizeInsight(raw, shapeNames = Object.keys(POST_SHAPES), art
       basis: text(raw?.comparison?.basis),
     },
     tension: text(raw?.tension),
+    commonRead: text(raw?.commonRead),
+    mechanism: list(raw?.mechanism).map(text).filter(Boolean).slice(0, 5),
+    numbers,
+    builderAngle: text(raw?.builderAngle),
     soWhat: {
       readerLearns: text(raw?.soWhat?.readerLearns),
       sameForAnotherStory: text(raw?.soWhat?.sameForAnotherStory),
@@ -271,7 +329,7 @@ export async function extractInsight({ article, llm, settings, shapeNames }) {
     label: 'insight',
     model: settings.model || undefined,
     temperature: 0.4,
-    maxTokens: 1100,
+    maxTokens: 1600,
     system: INSIGHT_PROMPT.replace('{{shapes}}', describeShapes(shapeNames)),
     user,
   });
@@ -374,4 +432,4 @@ const COMMON_CAPITALS = new Set([
   'but', 'not', 'you', 'your', 'our', 'are', 'was', 'has', 'have',
 ]);
 
-export default { extractInsight, normalizeInsight, pointFailures, quoteIsInArticle, thinStoryReason, storyAnchors, isAnchored };
+export default { extractInsight, normalizeInsight, displayIsInArticle, pointFailures, quoteIsInArticle, thinStoryReason, storyAnchors, isAnchored };

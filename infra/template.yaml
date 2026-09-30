@@ -39,6 +39,24 @@ Parameters:
   LlmModel:
     Type: String
     Default: gpt-4o-mini
+    Description: The cheap model, for classifying and curating.
+
+  WriterModel:
+    Type: String
+    Default: gpt-5.4
+    Description: >
+      Writes the hooks, the post and the picture, and (unless LLM_REVIEW_MODEL
+      is set) reads and judges the story. Empty = LlmModel for everything.
+
+  AuthorContext:
+    Type: String
+    Default: ''
+    Description: Things you have really done. The only first-person experience a post may mention.
+
+  VisualHandle:
+    Type: String
+    Default: ''
+    Description: Your name or handle, bottom-left of every card. Empty = unsigned.
 
   OpenAiApiKey:
     Type: String
@@ -89,6 +107,9 @@ Globals:
         FONTCONFIG_PATH: /var/task/assets/fonts
         LLM_PROVIDER: openai
         LLM_MODEL: !Ref LlmModel
+        LLM_WRITER_MODEL: !Ref WriterModel
+        AUTHOR_CONTEXT: !Ref AuthorContext
+        VISUAL_HANDLE: !Ref VisualHandle
         OPENAI_API_KEY: !Ref OpenAiApiKey
         PUBLISHER: !Ref Publisher
         LINKEDIN_ACCESS_TOKEN: !Ref LinkedInAccessToken

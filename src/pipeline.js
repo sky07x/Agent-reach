@@ -12,6 +12,7 @@ import path from 'node:path';
 import { createLogger } from './lib/logger.js';
 import { countWords } from './content-engine/index.js';
 import { getShape } from './content-engine/shapes.js';
+import { isTextOnly } from './meme-generator/media.js';
 import { structuralProblems } from './content-engine/quality.js';
 import { applyRules, splitOffHashtags, reattachHashtags } from './humanizer/index.js';
 import { getUsage, resetUsage } from './lib/llm-client.js';
@@ -23,7 +24,7 @@ function newPostId() {
 }
 
 export function createPipeline(agent) {
-  const { config, store, scraper, classifier, curator, contentEngine, humanizer, memeGenerator, publisher, analytics } = agent;
+  const { config, store, scraper, classifier, curator, contentEngine, humanizer, memeGenerator, visualPlanner, publisher, analytics } = agent;
 
   /* --- perceive ---------------------------------------------------------- */
 
@@ -136,14 +137,23 @@ export function createPipeline(agent) {
 
     const treatment = await memeGenerator.nextTreatment(config.memeGenerator.treatments);
 
-    // The picture is chosen to suit the post, not drawn from a hat: a
-    // terminal-log post asks for a terminal, a quote-reaction for a quote.
+    // The picture is planned from the finished post: a diagram for a
+    // breakdown, a chart for a numbers post, a cheat sheet for builder notes.
+    // A held post is not worth a call, and a planner that says nothing would
+    // help, or fails, leaves the meme card as the fallback.
+    const visual = visualPlanner && !isTextOnly(treatment) && !draft.needsReview
+      ? await visualPlanner.plan({ article, draft: { ...draft, text: humanized.text }, insight: draft.insight, treatment })
+      : null;
+
+    // The meme card is still chosen to suit the post, not drawn from a hat:
+    // a terminal-log post asks for a terminal, a quote-reaction for a quote.
     const rendered = await memeGenerator.render({
       topText: draft.meme.topText,
       bottomText: draft.meme.bottomText,
       footer: config.memeGenerator.footer,
       treatment,
       preferLayouts: getShape(draft.shape).layouts,
+      visual,
     });
 
     // Null is a real answer, not a failure: this post is text-only.
@@ -180,6 +190,10 @@ export function createPipeline(agent) {
       memeLayout: rendered?.layout ?? null,
       memePath,
       memeText: draft.meme,
+      // What the picture is: a planned visual type, or "meme" for the card.
+      visualType: rendered?.visualType ?? null,
+      visual: visual ?? null,
+      imageAltText: visual?.alt || (rendered ? `Image for a post about: ${article.title}` : null),
       curationReason: article.curation?.reason ?? '',
       angle: article.curation?.angle ?? '',
       // What the post was meant to say, so a reviewer can check it did.
@@ -219,7 +233,7 @@ export function createPipeline(agent) {
       const result = await publisher.publish({
         text: post.text,
         imageBuffer,
-        imageAltText: `Meme about: ${post.articleTitle}`,
+        imageAltText: post.imageAltText || `Image for a post about: ${post.articleTitle}`,
         postId: post.id,
         memePath: post.memePath,
       });
@@ -315,6 +329,15 @@ export function createPipeline(agent) {
         // not offered again, and the next pick gets its chance instead of the
         // run publishing nothing.
         if (built.post.needsReview) {
+          // The judge being down says nothing about the story. Leave it
+          // postable for the next run, and stop here: every other pick would
+          // be held for the same reason, after spending the same calls.
+          if (built.post.quality?.judgeUnavailable) {
+            rejected.push({ title: article.title, reason: 'held unreviewed: the judge could not be reached', postId: built.post.id });
+            posts.push(built.post);
+            break;
+          }
+
           await store.updateArticle(article.id, { rejectedForPost: `held: ${built.post.quality?.verdict ?? 'failed the quality gate'}` });
           rejected.push({ title: article.title, reason: `written and held: ${built.post.quality?.verdict ?? ''}`, postId: built.post.id });
           posts.push(built.post);

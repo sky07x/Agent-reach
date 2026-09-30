@@ -14,6 +14,7 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { createLogger } from '../lib/logger.js';
 import { renderSvg, LAYOUTS } from './layouts.js';
+import { renderVisualSvg } from './visuals.js';
 import { createRotation } from '../lib/rotation.js';
 import { MEDIA_TREATMENTS, getTreatment, isTextOnly, pickTemplate } from './media.js';
 
@@ -107,18 +108,33 @@ export function createMemeGenerator({ config, store }) {
      * @param {string} [input.templateName]   force a specific template
      * @param {string} [input.treatment]      which media treatment to render at
      * @param {string[]} [input.preferLayouts] layouts that suit this post
+     * @param {object} [input.visual]   a planned, checked visual. When given
+     *   it is drawn instead of a meme template; see visual-planner.js
      * @returns {Promise<{buffer: Buffer, template: string, layout: string, treatment: string}|null>}
      *   null when the treatment is text-only, which is a real choice and not
      *   a failure - callers must handle a post with no picture.
      */
-    async render({ topText, bottomText, footer, templateName, treatment = 'meme-square', preferLayouts }) {
+    async render({ topText, bottomText, footer, templateName, treatment = 'meme-square', preferLayouts, visual }) {
       if (isTextOnly(treatment)) {
         log.info('Text-only post, no image rendered', { treatment });
         return null;
       }
 
-      const templates = await getTemplates();
       const { width, height } = getTreatment(treatment);
+
+      if (visual) {
+        const visuals = settings.visuals ?? {};
+        const svg = renderVisualSvg({ visual, width, height, handle: visuals.handle, source: visuals.sourceLabel });
+        const buffer = await sharp(Buffer.from(svg)).png().toBuffer();
+
+        log.info('Visual rendered', { type: visual.type, treatment, size: `${width}x${height}`, bytes: buffer.length });
+
+        // No template name: the template cooldown is about meme cards, and a
+        // chart does not use one up.
+        return { buffer, template: null, layout: visual.type, treatment, visualType: visual.type };
+      }
+
+      const templates = await getTemplates();
 
       const template = templateName
         ? templates.find((candidate) => candidate.name === templateName)
@@ -145,7 +161,7 @@ export function createMemeGenerator({ config, store }) {
         bytes: buffer.length,
       });
 
-      return { buffer, template: template.name, layout: template.layout, treatment };
+      return { buffer, template: template.name, layout: template.layout, treatment, visualType: 'meme' };
     },
 
     /** Render and write to disk. Returns null for a text-only post. */

@@ -9,6 +9,11 @@ export const PRICE_PER_MILLION_TOKENS = {
   'gpt-4o': { input: 2.5, output: 10 },
   'gpt-4.1-mini': { input: 0.4, output: 1.6 },
   'gpt-4.1-nano': { input: 0.1, output: 0.4 },
+  'gpt-4.1': { input: 2, output: 8 },
+  'gpt-5': { input: 1.25, output: 10 },
+  'gpt-5-mini': { input: 0.25, output: 2 },
+  // Newer models are not listed until their prices are checked. Until then
+  // they log as $0, so read the token counts rather than the cost line.
 };
 
 /** Self-hosted models have no per-call price. The server bill is separate. */

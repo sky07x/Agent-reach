@@ -1,7 +1,9 @@
 # linkedin-tech-meme-agent
 
 Reads TechCrunch, decides which AI/CS stories are actually worth posting about,
-writes them up in a Fireship-ish voice, draws a meme, and publishes to LinkedIn
+writes them up the way an AI/ML engineer would explain them to peers, draws a
+picture that carries information (a diagram, a chart, a cheat sheet, a code
+window), and publishes to LinkedIn
 twice a week (Tue and Thu).
 
 It is built as a loop, not a pipeline: it perceives (scrape + classify),
@@ -46,7 +48,7 @@ npm run linkedin:auth         # one-time LinkedIn OAuth, writes .env for you
 | 4b. Write | `src/content-engine/` | Picks a shape and ending the story can carry, writes several first lines, rates them, then writes the post around the one that wins. | 3 per post |
 | 4c. Judge | `src/content-engine/quality.js` | Free checks, then one call scoring six named dimensions. Below the floor it is rewritten once, then **held**, and the next story gets the slot. | ~1 per post |
 | 5. Humanize | `src/humanizer/` | Strips AI tells mechanically, then one editor pass, then strips again. | 1 per post |
-| 6. Media | `src/meme-generator/` | Rotates square / portrait / text-only, then picks a template that suits the post. Drawn locally with sharp. | 0 |
+| 6. Media | `src/content-engine/visual-planner.js`, `src/meme-generator/` | Rotates portrait / square / text-only. Then one call plans a picture from the finished post (flow diagram, chart, stat, comparison, checklist, code or terminal window, quote) and every number on it is checked against the story. Drawn locally with sharp; the old meme card is the fallback. | 1 |
 | 7. Publish | `src/publisher/` | LinkedIn API, or the console provider which saves to disk. | 0 |
 | 8. Learn | `src/store/analytics.js` | Pulls likes/comments back, works out what did well, writes it into the prompts. | 0 |
 
@@ -59,6 +61,17 @@ on its own.
 ## The cost decision
 
 **Chosen: a hosted API (OpenAI `gpt-4o-mini`), not a self-hosted model.**
+
+> **Update: the writing now uses a stronger model.** `gpt-4o-mini` followed
+> every rule in this repo and still wrote like a press release with the
+> adjectives taken out. The calls that write and judge (insight, hooks, hook
+> rating, post, judge, editor pass, visual plan) now go to
+> `LLM_WRITER_MODEL`, `gpt-5.4` by default; classifying and curating stay on
+> `gpt-4o-mini`. That is roughly 8 calls a post on the bigger model. Its
+> price is not in `src/lib/pricing.js` yet, so the cost line in the logs
+> reads $0 for those calls: check the token counts, or add the price there.
+> Set `LLM_WRITER_MODEL=` (empty) to go back to one cheap model for
+> everything.
 
 At three posts a week the call volume is genuinely tiny, and the arithmetic is
 not close.
@@ -259,9 +272,18 @@ into one long obituary.
 ### Adding a post shape
 
 A shape is the skeleton of a post: what we ask the model for, and how the
-pieces are glued back together. Six ship with the agent (`classic-take`,
-`two-line-zinger`, `slow-burn-rant`, `terminal-log`, `quote-reaction`,
-`receipts`) and one is used per post, in rotation.
+pieces are glued back together. Eleven ship with the agent and nine are in
+the rotation: `breakdown` (how it works), `contrarian` (what the headline
+gets wrong), `builder-notes` (what to do about it), `story-mode`, `numbers`,
+`classic-take`, `quote-reaction`, `two-line-zinger` and `receipts`.
+`slow-burn-rant` and `terminal-log` still exist but are out of the rotation:
+the rant came out as a staircase of filler, and fake logs needed invented
+timestamps to look real.
+
+Some shapes need something only the insight step can see, and declare it
+with `fitsInsight`: a `breakdown` needs a mechanism the article explains, a
+`numbers` post needs two verified figures, a `contrarian` needs an obvious
+read of the headline that the article complicates.
 
 This matters more than the wording does. Rotating only the opening line while
 every post kept the same hook / body / question / hashtags frame is what made
@@ -289,10 +311,12 @@ the shape needs to own its own first line, the way `quote-reaction` does.
 ### How a post ends
 
 The ending rotates on its own counter, separately from the shape and the
-opener. Six of them live in `CLOSER_STYLES` in the same file:
+opener. Eight of them live in `CLOSER_STYLES` in the same file:
 
 | Ending | What it does |
 |---|---|
+| `takeaway` | the one line a reader copies into their notes |
+| `practitioner-question` | asks about the reader's own setup, which gets real answers |
 | `argument-bait` | a question worth arguing with |
 | `flat-verdict` | a statement, no question mark |
 | `prediction` | calls what happens next, as fact |
@@ -315,6 +339,11 @@ point inside it:
 
 | Shape | Words |
 |---|---|
+| `breakdown` | 110–220 |
+| `contrarian` | 70–165 |
+| `builder-notes` | 85–165 |
+| `story-mode` | 110–210 |
+| `numbers` | 70–160 |
 | `two-line-zinger` | 14–30 |
 | `quote-reaction` | 22–60 |
 | `receipts` | 25–70 |
@@ -336,7 +365,7 @@ fit — cutting a post mid-sentence does more damage than the overrun — but an
 overrun is logged, because a shape that always overshoots has a prompt that
 needs work.
 
-Four rotations of six, five, six and four advance independently, so the same
+Four rotations of nine, eight, five and four advance independently, so the same
 combination is effectively out of reach.
 
 ### Choosing the hook

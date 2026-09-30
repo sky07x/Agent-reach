@@ -78,7 +78,8 @@ lose. Name the outcome. Not "disagree if you want", not "good luck with that".`,
   // the 12-month revenue retention rate jumped."
   aside: {
     instruction: `End on a casual aside that adds ONE more real detail from the
-story, the one a reader would find telling. Lowercase is fine. Not a reaction
+story, the one a reader would find telling. Lowercase is fine, but names
+keep their capitals ("ChatGPT", never "chatgpt"). Not a reaction
 ("funny how that works", "kind of ironic"): a fact.`,
     field: 'one more telling fact from the story, said casually, under 15 words, not a reaction',
   },
@@ -86,6 +87,24 @@ story, the one a reader would find telling. Lowercase is fine. Not a reaction
     instruction: `The post just stops after the last line. No closing line, no
 question, no call to action. Do not wrap anything up.`,
     field: null,
+  },
+  // The line people screenshot. What makes a post worth saving is usually
+  // one sentence that compresses it, stated plainly enough to repeat.
+  takeaway: {
+    instruction: `End on the one line a reader would copy into their notes: the
+lesson of this story for someone who builds software, stated plainly. Not a
+slogan, not motivation, not a question. It names the specific thing.`,
+    field: 'the lesson in one plain sentence, under 18 words, names something specific, no question mark',
+  },
+  // "What do you think?" gets "great post". A question about the reader's own
+  // setup gets an answer, because people like describing their own stack.
+  'practitioner-question': {
+    instruction: `End by asking the readers who build this kind of thing one
+concrete question about their own practice, where the answer is a real choice
+they made: "Are you pinning model versions in prod, or letting the alias
+float?" Name the choice. Never "what do you think?", "thoughts?", "agree?" or
+anything that would fit under another post.`,
+    field: 'one question about the reader\'s own practice, naming a concrete choice, under 22 words',
   },
 };
 
@@ -246,7 +265,161 @@ export function hasSequence(article) {
     || (text.match(/\b[A-Z][a-zA-Z0-9.+-]{2,}\b/g) ?? []).length >= 4;
 }
 
+/**
+ * Enough real numbers to build a post, and a chart, on? Money, percentages,
+ * multiples and counts with a scale. Years and dates do not count: every
+ * article has those.
+ */
+export function hasNumbers(article) {
+  const text = `${article?.title ?? ''} ${article?.summary ?? ''} ${article?.body ?? ''}`;
+  const withUnit = text.match(/\$\s?\d[\d,.]*\s?(?:[kmb]\b|million|billion|trillion)?|\d[\d,.]*\s?(?:%|x\b|percent|million|billion|trillion)/gi) ?? [];
+  // "3,000 customers" is a telling number too; "2026" is a date.
+  const counts = (text.match(/\b\d{1,3}(?:,\d{3})+\b|\b\d{3,}\b/g) ?? []).filter((value) => !/^(?:19|20)\d\d$/.test(value));
+  return new Set([...withUnit, ...counts].map((value) => value.toLowerCase().replace(/\s+/g, ''))).size >= 2;
+}
+
+/** Strip the bullets and arrows a model adds to list items on its own. */
+function unbullet(line) {
+  return String(line ?? '').replace(/^\s*(?:[-*•→>]+|\d+[.)])\s*/, '').trim();
+}
+
 export const POST_SHAPES = {
+  /**
+   * How the thing actually works. The post engineers save: they came for the
+   * headline and leave understanding the mechanism behind it.
+   */
+  breakdown: {
+    instruction: `Explain how the thing in this story actually works, to an
+engineer who only saw the headline. After the first line: one or two lines of
+setup, then the mechanism as a few short steps, in plain words, in the order
+things happen. Use only the steps the article describes (you are given them
+under MECHANISM); do not invent internals. Then the part most people will miss,
+and what it means, in your own voice. Steps are different lengths and never
+start the same way.`,
+    suits: 'a product, model, attack or technique whose inner workings the article actually describes',
+    closer: 'rotate',
+    words: { min: 110, max: 220 },
+    layouts: [],
+    visuals: ['flow', 'code', 'comparison'],
+    fits: hasMechanism,
+    fitsInsight: (insight) => (insight.mechanism?.length ?? 0) >= 2,
+    fields: [
+      { key: 'setup', type: 'string', description: 'one or two lines after the hook that say what we are looking at' },
+      { key: 'steps', type: 'string[]', description: 'two to five steps of the mechanism, plain words, uneven lengths, no numbering or bullets' },
+      { key: 'insight', type: 'string', description: 'one to three lines: the part most people miss and what it means' },
+      { key: 'closer', type: 'string', description: 'the last line' },
+    ],
+    assemble: ({ hook, parts, hashtags }) =>
+      blocks(hook, parts.setup, (parts.steps ?? []).map((step) => `→ ${unbullet(step)}`), parts.insight, parts.closer, tagLine(hashtags)),
+  },
+
+  /**
+   * The headline says one thing; a detail in the article says another. The
+   * post that makes people go back and reread the story.
+   */
+  contrarian: {
+    instruction: `The obvious read of this headline is wrong, or at least
+incomplete, and a specific detail in the article shows it. The first line
+already names that obvious read or the flip. Then: the detail that changes it,
+quoted or stated exactly, and why it changes the picture. Then what it
+means: for the company, the market, or the people building with it,
+whichever is truest to this story. Never write "most people think", "many believe"
+or "we all assume": say what the headline implies, then say what the article
+actually shows.`,
+    suits: 'the headline invites one conclusion and a detail in the article points to a different one',
+    closer: 'rotate',
+    words: { min: 70, max: 165 },
+    layouts: ['two-panel'],
+    visuals: ['comparison', 'stat', 'quote'],
+    fits: () => true,
+    fitsInsight: (insight) => Boolean(String(insight.commonRead ?? '').trim()),
+    fields: [
+      { key: 'turn', type: 'string', description: 'two to four short lines: the detail from the article that changes the obvious read' },
+      { key: 'meaning', type: 'string', description: 'one to three lines: what it means, for whoever it matters to most in this story' },
+      { key: 'closer', type: 'string', description: 'the last line' },
+    ],
+    assemble: ({ hook, parts, hashtags }) =>
+      blocks(hook, parts.turn, parts.meaning, parts.closer, tagLine(hashtags)),
+  },
+
+  /**
+   * What this changes on Monday morning. Practical, specific, saveable.
+   */
+  'builder-notes': {
+    instruction: `What this story changes for someone actually building with it.
+After the first line: one line of context, then two or four concrete notes,
+each one thing an engineer should do, check, measure or stop doing because of
+this story, each naming a specific from it. Each note is ONE sentence, under
+25 words: a note, not a paragraph. Not advice that would be true without this
+story ("write tests", "monitor your costs"). Notes are different lengths and
+built differently. Never three notes. No questions inside the notes.`,
+    suits: 'a launch, change, price or failure that changes what an engineer should do, check or avoid',
+    closer: 'rotate',
+    words: { min: 85, max: 165 },
+    layouts: [],
+    visuals: ['checklist', 'code', 'comparison'],
+    fits: hasMechanism,
+    fields: [
+      { key: 'context', type: 'string', description: 'one line of context after the hook' },
+      { key: 'notes', type: 'string[]', description: 'two or four notes, each ONE sentence under 25 words, tied to this story, uneven lengths, no numbering' },
+      { key: 'closer', type: 'string', description: 'the last line' },
+    ],
+    assemble: ({ hook, parts, hashtags }) =>
+      blocks(hook, parts.context, (parts.notes ?? []).map((note, index) => `${index + 1}. ${unbullet(note)}`), parts.closer, tagLine(hashtags)),
+  },
+
+  /**
+   * The story, told as a story. People read to the end of a story; nobody
+   * reads to the end of a summary.
+   */
+  'story-mode': {
+    instruction: `Tell it as a short story. The first line puts the reader inside
+the moment. Then what happened, in order, in short paragraphs of one or two
+lines, keeping the tension the facts contain: the decision, the bet, the turn.
+Third person, about the people and companies in the article. Only events the
+article describes; no invented scenes, dialogue, feelings or reactions. End
+on what the story says, in one or two lines. A lesson for engineers only if
+it is genuinely there; a good story often lands better without one.`,
+    suits: 'people made a decision, a bet or a mistake and there is a turn: a pivot, a launch that backfired, a founder\'s call',
+    closer: 'rotate',
+    words: { min: 110, max: 210 },
+    layouts: ['two-panel'],
+    visuals: ['flow', 'quote', 'stat'],
+    fits: hasSequence,
+    fields: [
+      { key: 'scenes', type: 'string[]', description: 'three to five short paragraphs telling what happened, in order' },
+      { key: 'lesson', type: 'string', description: 'one or two lines on what the story says; a lesson only if it is genuinely there' },
+      { key: 'closer', type: 'string', description: 'the last line' },
+    ],
+    assemble: ({ hook, parts, hashtags }) =>
+      blocks(hook, ...(parts.scenes ?? []), parts.lesson, parts.closer, tagLine(hashtags)),
+  },
+
+  /**
+   * Let the numbers talk. A post built on the story's own figures, and a
+   * chart that shows them.
+   */
+  numbers: {
+    instruction: `The numbers are the story. After the first line: two to four
+short paragraphs, each built on one number from NUMBERS, exactly as given,
+saying what it means in plain words. Put them side by side where the contrast
+between them is the point. No numbers that are not in the story, and no maths
+on them. Then the takeaway.`,
+    suits: 'a story with two or more telling numbers whose contrast is the point',
+    closer: 'rotate',
+    words: { min: 70, max: 160 },
+    layouts: ['classic'],
+    visuals: ['chart', 'stat'],
+    fits: hasNumbers,
+    fitsInsight: (insight) => (insight.numbers?.length ?? 0) >= 2,
+    fields: [
+      { key: 'figures', type: 'string[]', description: 'two to four short paragraphs, each built on one exact number from the story' },
+      { key: 'closer', type: 'string', description: 'the last line' },
+    ],
+    assemble: ({ hook, parts, hashtags }) =>
+      blocks(hook, ...(parts.figures ?? []), parts.closer, tagLine(hashtags)),
+  },
+
   /**
    * The original shape. Still the best one for a story with a real argument
    * in it, which is why it stays in the rotation rather than being deleted.
@@ -261,6 +434,7 @@ earns its place, and none of them retells the headline. One idea only.`,
     words: { min: 55, max: 155 },
     // No strong affinity: an argument can be illustrated any number of ways.
     layouts: [],
+    visuals: ['comparison', 'stat', 'flow'],
     // The fallback shape. Every story can carry an argument, which is why
     // this one must never decline: something has to be able to run.
     fits: () => true,
@@ -294,6 +468,7 @@ not add context, do not explain, do not ask a question. Trust the reader.`,
     words: { min: 14, max: 30 },
     // Big bold type for a line meant to stop a thumb.
     layouts: ['classic'],
+    visuals: ['stat', 'meme'],
     // A zinger needs one absurd fact, which any story worth curating has.
     fits: () => true,
     fields: [
@@ -328,6 +503,7 @@ feel like you put the phone down after typing it.`,
     words: { min: 40, max: 105 },
     // A rant is someone talking, so give it a voice on the image too.
     layouts: ['chat', 'classic'],
+    visuals: ['meme'],
     // You can only rant about something that actually does something.
     fits: hasMechanism,
     fields: [
@@ -362,6 +538,7 @@ story. No invented percentages, no dates. No more than five lines.`,
     words: { min: 35, max: 85 },
     // The obvious one. A post that is fake terminal output gets a terminal.
     layouts: ['terminal'],
+    visuals: ['code'],
     // Fake log output about a funding round is nonsense. There has to be a
     // machine in the story for a machine to be narrating.
     fits: hasMechanism,
@@ -397,6 +574,7 @@ no usable quote, use the most revealing exact phrase from it instead.`,
     closer: 'rotate',
     words: { min: 22, max: 60 },
     layouts: ['quote'],
+    visuals: ['quote'],
     // The one that went wrong. No quote, no quote-reaction.
     fits: hasUsableQuote,
     overrideHook: `The first line is the quote itself, in quotation marks,
@@ -442,6 +620,7 @@ retell the article in order are a summary, not a post.`,
     words: { min: 25, max: 70 },
     // Beats are a sequence, and two-panel is the before/after shape.
     layouts: ['two-panel'],
+    visuals: ['flow', 'comparison'],
     // Beats need things to have happened, plural.
     fits: hasSequence,
     fields: [

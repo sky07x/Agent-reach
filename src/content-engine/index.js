@@ -75,7 +75,11 @@ export function lastLine(text) {
  * taste is only a preference.
  */
 export function eligibleShapes({ names, article, insight }) {
-  const fitting = names.filter((name) => POST_SHAPES[name]?.fits(article));
+  // Some shapes need something only the insight step can see: a breakdown
+  // with no mechanism to walk through is a summary with arrows on it. Without
+  // an insight nothing can be judged, so nothing is ruled out on that count.
+  const fitting = names.filter((name) => POST_SHAPES[name]?.fits(article)
+    && (!insight || !POST_SHAPES[name].fitsInsight || POST_SHAPES[name].fitsInsight(insight)));
   const suited = insight?.shapes?.length ? fitting.filter((name) => insight.shapes.includes(name)) : [];
   return suited.length ? suited : fitting;
 }
@@ -125,6 +129,9 @@ export function createContentEngine({ config, llm, store }) {
       ending: lastLine(post.text),
       shape: post.shape,
       openingStyle: post.openingStyle,
+      visualType: post.visualType,
+      // The whole post, for the phrase-repetition check.
+      text: post.text ?? '',
     }));
   }
 
@@ -143,6 +150,7 @@ export function createContentEngine({ config, llm, store }) {
 
     const result = await llm.chatJson({
       label: 'write-hooks',
+      model: settings.writerModel || undefined,
       temperature: 0.95,
       maxTokens: 500,
       system: SYSTEM_PROMPT,
@@ -238,8 +246,9 @@ export function createContentEngine({ config, llm, store }) {
 
       const result = await llm.chatJson({
         label: 'write-post',
+        model: settings.writerModel || undefined,
         temperature: 0.9,
-        maxTokens: 900,
+        maxTokens: 1200,
         system: SYSTEM_PROMPT,
         user: buildUserPrompt({
           article,
@@ -385,7 +394,9 @@ export function createContentEngine({ config, llm, store }) {
 
       // One retry, told exactly what was wrong. Two models disagreeing twice
       // is a signal about the story, not something more attempts will fix.
-      if (!assessment.ok) {
+      // A rewrite is judged by the same judge, so there is no point writing
+      // one while it cannot be reached.
+      if (!assessment.ok && !assessment.judgeUnavailable) {
         log.warn("Rewriting after a failed assessment", { problems: assessment.problems });
 
         const floor = settings.quality.minDimension ?? settings.quality.minScore;

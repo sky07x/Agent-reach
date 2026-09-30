@@ -23,7 +23,13 @@ function tidy(text) {
 
 /** Capitalise the first letter of a sentence we may have decapitated. */
 function fixSentenceStarts(text) {
-  return text.replace(/(^|[.!?]\s+|\n)([a-z])/g, (match, prefix, letter) => prefix + letter.toUpperCase());
+  // Not after an abbreviation: "For U.S. vendor picks" is one sentence, and
+  // capitalising it gave "For U.S. Vendor picks".
+  return text.replace(/(^|[.!?]\s+|\n)([a-z])/g, (match, prefix, letter, offset) => {
+    const before = text.slice(Math.max(0, offset - 6), offset + prefix.length);
+    if (/(?:\b[A-Za-z]\.[A-Za-z]\.|\b(?:e\.g|i\.e|vs|etc|approx)\.)\s+$/.test(before)) return match;
+    return prefix + letter.toUpperCase();
+  });
 }
 
 /**

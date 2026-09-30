@@ -72,6 +72,10 @@ export const FILLER_CLOSERS = [
   'something to keep in mind',
   'something to think about',
   'food for thought',
+  'agree',
+  'follow for more',
+  'save this for later',
+  'repost if you agree',
 ];
 
 /**
@@ -94,6 +98,53 @@ export const REPORT_VOICE = [
   /\b(?:reshap|redefin)(?:e|es|ing)\b/i,
   /\bsignals a\b/i,
 ];
+
+/**
+ * The contrast construction a model uses to sound insightful: "It isn't X.
+ * It's Y." "Less X than Y." Once can be a point. Two in one post, and the
+ * post is a pattern, not a person. The first gpt-5 runs put one in nearly
+ * every hook and another in the body.
+ */
+export const CONTRAST_FRAMES = [
+  /\b(?:is|was|are)n'?t (?:just |really |about |an? |the )?[^.!?\n]{2,60}[.;,]\s*(?:it|this|that|they)(?:'s| is| are|'re)\b/i,
+  /\b(?:is|are|looks|reads|feels) less (?:like )?[^.!?\n]{2,50} (?:than|and more)\b/i,
+  /\bnot (?:just )?(?:an? |the )?[^.!?\n,]{2,40}, but\b/i,
+];
+
+/**
+ * The writer's own habits. Each is fine once. The first gpt-5 batch opened
+ * or closed half its posts with one of them, and a move you have seen in two
+ * of the last four posts is a template, however natural it sounded the first
+ * time. Compared against recent posts rather than banned outright.
+ */
+export const SIGNATURE_PHRASES = [
+  { name: '"If you build / If your roadmap..."', pattern: /\bif (?:you(?:'re)? (?:build|run|ship|sell|own|are building)|your (?:roadmap|team|product|stack|agent|app|company|pipeline))\b/i },
+  { name: '"looks less like X, more like Y"', pattern: /\b(?:looks|reads|feels|is) less like\b/i },
+  { name: '"My read is"', pattern: /\bmy read is\b/i },
+  { name: '"That changes the..."', pattern: /\bthat changes (?:the|how|what|everything)\b/i },
+  { name: '"the lesson / the takeaway"', pattern: /\bthe (?:product |real |builder )?(?:lesson|takeaway)\b/i },
+  { name: '"The point isn\'t / The point is"', pattern: /\bthe point (?:isn'?t|is)\b/i },
+  { name: '"for builders / for people who build"', pattern: /\bfor (?:builders|people who build|anyone building)\b/i },
+];
+
+/** Which signature phrases a text uses. */
+export function signaturesIn(text) {
+  const flat = String(text ?? '').replace(/[’‘]/g, "'");
+  return SIGNATURE_PHRASES.filter((phrase) => phrase.pattern.test(flat)).map((phrase) => phrase.name);
+}
+
+/**
+ * The signature phrases worn out by recent posts: used in at least `limit`
+ * of the last `window`. Shared by the check and by the writer's prompt, so
+ * the writer is told before it writes, not only after.
+ */
+export function overusedSignatures(recent = [], { window = 4, limit = 2 } = {}) {
+  const counts = new Map();
+  for (const post of recent.slice(0, window)) {
+    for (const name of signaturesIn(post.text)) counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return [...counts.entries()].filter(([, count]) => count >= limit).map(([name]) => name);
+}
 
 /** Ordinary words that are capitalised only because a headline starts with them. */
 const SENTENCE_STARTERS = new Set([
@@ -440,6 +491,16 @@ export function structuralProblems({ article, draft, recent = [], authorContext 
     problems.push(`"${narrated.split(/\s+/).slice(0, 3).join(' ')}..." narrates the point instead of making it: say what it means`);
   }
 
+  const flat = text.replace(/[’‘]/g, "'").replace(/\s+/g, ' ');
+
+  // Addressing the reader as a builder is one move, not a paragraph style.
+  const addressed = (flat.match(new RegExp(SIGNATURE_PHRASES[0].pattern.source, 'gi')) ?? []).length;
+  if (addressed >= 2) problems.push(`${addressed} "if you build / if your..." lines in one post. Keep one at most`);
+  const contrastCount = CONTRAST_FRAMES.reduce((sum, pattern) => sum + (flat.match(new RegExp(pattern.source, 'gi'))?.length ?? 0), 0);
+  if (contrastCount >= 2) {
+    problems.push(`${contrastCount} "it isn't X, it's Y" contrasts in one post, the most recognisable pattern a model writes. Keep at most one and say the rest plainly`);
+  }
+
   // One question is an ending. Two is a post asking instead of saying.
   const questions = (text.match(/\?(?=\s|$|["'”’])/g) ?? []).length;
   if (questions > 1) problems.push(`${questions} questions in one post: say it instead of asking it`);
@@ -454,6 +515,11 @@ export function structuralProblems({ article, draft, recent = [], authorContext 
 
     const sameEnd = recent.find((post) => post.ending && flatten(post.ending) === endingFlat && endingFlat.length > 0);
     if (sameEnd) problems.push(`ends the same way as a recent post ("${sameEnd.ending}")`);
+
+    const worn = overusedSignatures(recent).filter((name) => signaturesIn(text).includes(name));
+    if (worn.length) {
+      problems.push(`reuses a move from recent posts: ${worn.join(', ')}. Say it a different way, or leave it out`);
+    }
   }
 
   // A quote that opens on a conjunction was cut out of the middle of a
@@ -526,6 +592,10 @@ export const JUDGE_DIMENSIONS = {
   informationValue: 'Does the reader come away knowing something they would not get from the headline? Accurate but unsurprising scores 2.',
   nonGeneric: 'Does the reasoning depend on this story? If you swapped the company and numbers for another AI story and the post still worked, score 1-2. Story-specific nouns do not count, story-specific reasoning does.',
   evidence: 'Are facts from the source kept apart from interpretation? Stating a guess as fact, inventing a cause, a trend, a rivalry or a user reaction the story does not support scores 1-2.',
+  // The third round, when posts had a point and still read as generated:
+  // right facts, right argument, and the unmistakable cadence of a model.
+  human: 'Would a reader believe one specific engineer typed this? Even rhythm, stock LinkedIn phrasing, a tidy moral at the end, motivational tone, or a list of three score 1-2. A real opinion with a reason, precise engineering language and uneven sentences score high.',
+  engagement: 'Would an engineer save it, share it, or reply with a real answer? Something useful to keep, or a claim worth pushing back on. Bait ("Agree?", "Thoughts?", "Follow for more") scores 1. Clickbait that the post does not pay off scores 1.',
 };
 
 /**
@@ -537,12 +607,13 @@ export const POINT_DIMENSIONS = ['point', 'informationValue', 'nonGeneric'];
 
 /** Any one of these below the floor holds the post, whatever the average. */
 export const CRITICAL_DIMENSIONS = [
-  'hook', 'specificity', 'insight', 'accuracy', 'point', 'informationValue', 'nonGeneric', 'evidence',
+  'hook', 'specificity', 'insight', 'accuracy', 'point', 'informationValue', 'nonGeneric', 'evidence', 'human',
 ];
 
-const JUDGE_PROMPT = `You are the editor of a page that posts short takes on
-tech news for developers, deciding whether a post is worth publishing. You
-are hard to please and you have seen every AI-written LinkedIn post there is.
+const JUDGE_PROMPT = `You are the editor of an AI/ML engineer's LinkedIn page,
+deciding whether a post is worth publishing under their name. The page posts
+explainers, takes and practical notes on tech news for engineers. You are
+hard to please and you have seen every AI-written LinkedIn post there is.
 
 You get the story the post is based on, the point it was meant to make, and
 the post.
@@ -564,7 +635,8 @@ Most posts you see are 3s. A 4 is a post you would actually stop scrolling
 for. Do not hand out 4s to posts that are merely correct.
 
 Calibration. A two-line post that lands a specific point is a 4 or 5 on
-everything. Do not mark a post down for being short, for being oblique, or
+everything. A longer explainer where every line teaches something is not
+padding either. Do not mark a post down for being short or long, for being oblique, or
 for using a format like a fake log or a list of beats instead of prose. Do
 not mark it down for having an opinion, as long as the opinion is presented
 as one. Do mark it down for naming a subject and then saying nothing about
@@ -598,7 +670,8 @@ hook is generic and the body only summarises the announcement" is useful.
 
 Reply as JSON:
 {"scores": {"hook": n, "specificity": n, "insight": n, "accuracy": n, "voice": n, "coherence": n,
-            "point": n, "implication": n, "informationValue": n, "nonGeneric": n, "evidence": n},
+            "point": n, "implication": n, "informationValue": n, "nonGeneric": n, "evidence": n,
+            "human": n, "engagement": n},
  "thesis": "...",
  "survivesNameSwap": true or false,
  "genericHook": true or false,
@@ -623,7 +696,7 @@ export async function judgeDraft({ article, draft, llm, insight, model }) {
     label: 'judge-post',
     model: model || undefined,
     temperature: 0.2,
-    maxTokens: 800,
+    maxTokens: 1000,
     system: JUDGE_PROMPT.replace('{{dimensions}}', Object.entries(JUDGE_DIMENSIONS)
       .map(([name, question]) => `  ${name}: ${question}`)
       .join('\n')),
@@ -790,10 +863,19 @@ export async function assessDraft({ article, draft, llm, settings, insight, rece
       problems: ok ? judged.problems : [...judged.problems, ...failures.filter((failure) => !judged.problems.includes(failure))],
     };
   } catch (error) {
-    // A judge that cannot be reached must not block the run. Say so loudly
-    // rather than silently waving everything through.
-    log.warn('Judge unavailable, letting the draft through unjudged', { error: error.message });
-    return { ok: true, score: null, problems: [], verdict: 'judge unavailable' };
+    // An unreviewed post does not go out under your name. It used to: a
+    // judge that could not be reached waved the draft through, and the day
+    // the API ran out of credits a post was marked ready without a review.
+    // Now it is held, and judgeUnavailable tells the caller this is about
+    // the judge, not the post, so the story can be tried again next run.
+    log.warn('Judge unavailable, holding the draft', { error: error.message });
+    return {
+      ok: false,
+      score: null,
+      judgeUnavailable: true,
+      problems: [`the judge could not be reached (${error.message}), so the post was not reviewed`],
+      verdict: 'judge unavailable, held unreviewed',
+    };
   }
 }
 

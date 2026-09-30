@@ -42,33 +42,39 @@ function reattachHashtags(prose, hashtagLine) {
   return hashtagLine ? `${prose.trimEnd()}\n\n${hashtagLine}` : prose;
 }
 
-const EDITOR_PROMPT = `You are an editor. You get a LinkedIn post that was
-written by a language model and your job is to make it read like a human
-developer typed it.
+const EDITOR_PROMPT = `You are an editor. You get a LinkedIn post by an
+engineer who builds with AI, drafted with a language model's help, and your
+job is to make it read like that engineer typed it themselves.
 
-Keep: the meaning, the facts, the numbers, the hashtags.
+Keep: the meaning, the facts, the numbers, the opinions, the hashtags.
 Keep it roughly the same length or shorter.
 
 Keep the structure exactly as you find it. The line breaks and the number of
 paragraphs were chosen deliberately, and posts are built to different shapes
 on purpose. Never merge lines into a paragraph, never split a paragraph up,
-and never reflow a block of log or terminal output into prose. If the post
+and keep list lines that start with "→" or "1." exactly as lists. If the post
 does not end with a question, it is not supposed to, so do not add one.
 
 Change:
 - Break up any rhythm where every sentence is the same length. Mix a long one
   with a three-word fragment.
-- Replace anything that sounds like a press release with how a person talks.
+- Replace anything that sounds like a press release, a course ad or a
+  motivational poster with how a person actually talks.
 - Delete words that add nothing. Models over-explain; people don't.
-- Contractions everywhere. Lowercase is fine mid-post for emphasis.
+- Swap vague words for the precise engineering term when the post implies one.
+- Contractions everywhere.
 - No em-dashes at all. Full stops and commas only.
 - If a joke is explained, delete the explanation and keep the joke.
 
-Do not add new claims. Do not add emoji. Do not add hashtags.
+Do not add new claims. Do not add emoji. Do not add hashtags. Do not add a
+call to action.
 Reply with the edited post only, no preamble and no quotes around it.`;
 
 export function createHumanizer({ config, llm }) {
   const settings = config.humanizer;
+  // The editor rewrites prose, so it gets the same model as the writer. A
+  // weaker editor over a stronger writer only files the voice back down.
+  const model = config.content?.writerModel || undefined;
 
   return {
     /**
@@ -114,6 +120,7 @@ export function createHumanizer({ config, llm }) {
 
         edited = await llm.chat({
           label: 'humanize-edit',
+          model,
           temperature: 0.85,
           maxTokens: 600,
           system: EDITOR_PROMPT,

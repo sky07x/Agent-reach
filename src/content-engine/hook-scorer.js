@@ -46,6 +46,12 @@ export const GENERIC_HOOKS = [
   { pattern: /^(?:we|many|people|everyone) (?:all |often |usually |still )?(?:think|thought|believe|assume)\b/i, name: '"we all think..." template' },
   { pattern: /^many believe\b/i, name: '"many believe..." template' },
   { pattern: /^it'?s (?:like|a lot like|basically)\b/i, name: 'a comparison with no subject' },
+  // The LinkedIn-creator openers. Every one of them is a promise of content
+  // rather than content, and readers have learned to scroll past all of them.
+  { pattern: /^(?:ever wondered|have you ever|imagine (?:a|if|this)|picture this|in a world where)\b/i, name: 'creator-course opener' },
+  { pattern: /^(?:let'?s talk about|let'?s dive|we need to talk|big news|breaking|unpopular opinion|hot take|psa)\b/i, name: 'announces a take instead of making it' },
+  { pattern: /\bhere'?s (?:why|how|what)(?: it matters| this matters| you need to know)?[.:]?$/i, name: 'ends on "here\'s why"' },
+  { pattern: /\bthread\b|🧵|🚨|👇/i, name: 'thread/alarm bait' },
 ];
 
 /** Openers that read like a news desk instead of a person with an opinion. */
@@ -174,6 +180,8 @@ lines. Rate each one 1-5:
   4  specific curiosity. A concrete detail that makes a developer want the
      explanation, and it leads straight into the point of the post.
   5  the line people screenshot. Specific, surprising, and true to the story.
+     It opens a question the reader now needs answered, and it sounds like
+     a person said it out loud, not like a headline or a course ad.
 
 Most candidates you see are 2s and 3s. Be stingy with 4 and 5.
 

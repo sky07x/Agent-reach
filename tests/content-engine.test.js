@@ -19,7 +19,7 @@ const ARTICLE = {
   title: 'OpenAI, Anthropic and Google ship an agent that runs shell commands in production',
   url: 'https://example.test/a1',
   summary: '"We do not consider this a security risk at all," the CTO said, weeks after the first outage.',
-  body: 'The agent crashed twice in 14 days, then shipped anyway to 3,000 customers.',
+  body: 'The agent crashed twice in 14 days, then shipped anyway to 3,000 customers after a $40M round.',
   curation: { angle: 'shell access is a default now', frame: 'foot-gun' },
 };
 
@@ -31,6 +31,12 @@ const INSIGHT = {
   whatDevsMiss: 'The crashes were in the sandbox that is supposed to make this safe.',
   insight: 'The OpenAI sandbox is the product now, and it failed twice in 14 days before launch.',
   tension: 'Crashes in a sandbox are the sandbox working.',
+  commonRead: 'Another agent launch.',
+  mechanism: ['The agent proposes a shell command.', 'A sandbox runs it and reports back.'],
+  numbers: [
+    { label: 'customers at launch', value: 3000, display: '3,000', quote: 'shipped anyway to 3,000 customers' },
+    { label: 'round size', value: 40000000, display: '$40M', quote: 'after a $40M round' },
+  ],
   shapes: [],
   substance: 4,
   substanceReason: 'A concrete failure and a real consequence.',
@@ -63,6 +69,17 @@ function fakeLlm(overrides = {}) {
       logLines: ['openai-sandbox: exit 137', 'openai-sandbox: exit 137'],
       reaction: 'Two OpenAI crashes in the safe part.',
       beats: ['two crashes in 14 days', 'shipped to 3,000 customers'],
+      // The newer shapes' fields.
+      setup: 'OpenAI put the agent in a sandbox before giving it a shell.',
+      steps: ['The agent asks for a command.', 'The OpenAI sandbox runs it, and crashed twice in 14 days.'],
+      insight: 'The crashes were inside the part that is meant to make this safe.',
+      turn: 'The OpenAI crashes were inside the sandbox, the safe part.',
+      meaning: 'So the sandbox is what you are really buying.',
+      context: 'OpenAI shipped it to 3,000 customers anyway.',
+      notes: ['Read what the OpenAI sandbox actually isolates.', 'Log every shell command the agent runs, not just the failures.'],
+      scenes: ['Inside the OpenAI sandbox, the shell kept exiting with code 137.', 'Launch day did not move.'],
+      lesson: 'Test the isolation layer as hard as the model.',
+      figures: ['Two crashes in 14 days.', '3,000 customers anyway.'],
       hashtags: ['#AIAgents', '#AppSec'],
       memeTopText: 'A',
       memeBottomText: 'B',
@@ -210,7 +227,7 @@ test('an unreachable insight step does not stop the run', async () => {
 /* --- story first, rotation second ----------------------------------------- */
 
 test('the shapes the story suits are the only ones the rotation can reach', async () => {
-  const llm = fakeLlm({ insight: { ...INSIGHT, shapes: ['terminal-log', 'slow-burn-rant'] } });
+  const llm = fakeLlm({ insight: { ...INSIGHT, shapes: ['builder-notes', 'receipts'] } });
   const store = memoryStore();
   const engine = createContentEngine({ config, llm, store });
 
@@ -221,7 +238,7 @@ test('the shapes the story suits are the only ones the rotation can reach', asyn
     store.posts.unshift({ shape: draft.shape, hook: `hook ${i}`, text: `hook ${i}\n\nend ${i}` });
   }
 
-  assert.deepEqual([...seen].sort(), ['slow-burn-rant', 'terminal-log'], 'story fit decides who is eligible');
+  assert.deepEqual([...seen].sort(), ['builder-notes', 'receipts'], 'story fit decides who is eligible');
 });
 
 test('a suggested shape the story cannot physically carry is still declined', () => {
@@ -367,6 +384,15 @@ test('a post held after its rewrite hands the slot to the next pick', async () =
       : { scores: GOOD_SCORES, verdict: 'Specific.' }),
   });
 
+  // Two different stories end differently, or the second is rightly held
+  // for ending the same way as the first.
+  const baseChatJson = llm.chatJson.bind(llm);
+  llm.chatJson = async (options) => {
+    const answer = await baseChatJson(options);
+    if (options.label !== 'write-post' || !options.user.includes('partnership announcement')) return answer;
+    return { ...answer, closer: 'OpenAI announced it, and that is all it did.' };
+  };
+
   const agent = {
     config,
     store,
@@ -392,7 +418,7 @@ test('a post held after its rewrite hands the slot to the next pick', async () =
 
 test('the judging calls use the review model when one is set, and only those', async () => {
   const llm = fakeLlm();
-  const reviewed = { ...config, content: { ...config.content, reviewModel: 'a-bigger-model' } };
+  const reviewed = { ...config, content: { ...config.content, reviewModel: 'a-bigger-model', writerModel: '' } };
 
   await createContentEngine({ config: reviewed, llm, store: memoryStore() }).generate(ARTICLE);
 
@@ -402,6 +428,18 @@ test('the judging calls use the review model when one is set, and only those', a
   assert.equal(byLabel['judge-post'], 'a-bigger-model');
   assert.equal(byLabel['write-hooks'], undefined, 'the writer keeps the default model');
   assert.equal(byLabel['write-post'], undefined);
+});
+
+test('the writing calls use the writer model when one is set', async () => {
+  const llm = fakeLlm();
+  const writing = { ...config, content: { ...config.content, reviewModel: 'a-bigger-model', writerModel: 'a-writer' } };
+
+  await createContentEngine({ config: writing, llm, store: memoryStore() }).generate(ARTICLE);
+
+  const byLabel = Object.fromEntries(llm.calls.map((call) => [call.label, call.model]));
+  assert.equal(byLabel['write-hooks'], 'a-writer');
+  assert.equal(byLabel['write-post'], 'a-writer');
+  assert.equal(byLabel['judge-post'], 'a-bigger-model', 'the judge is not the writer');
 });
 
 test('an editor pass that breaks a checked post is reverted to the checked version', async () => {
@@ -428,4 +466,30 @@ test('an editor pass that breaks a checked post is reverted to the checked versi
   assert.doesNotMatch(post.text, /This shows OpenAI is serious/);
   assert.equal(post.humanizerReport.editorPass, 'reverted');
   assert.ok(post.humanizerReport.editorIntroduced.length > 0, 'and it says what the editor broke');
+});
+
+test('when the judge is down, the post is held, not rewritten, and the story stays postable', async () => {
+  const other = { ...ARTICLE, id: 'other', title: 'A second story' };
+  const store = memoryStore({ articles: [ARTICLE, other] });
+  const llm = fakeLlm({ 'judge-post': () => { throw new Error('429 no credits'); } });
+
+  const agent = {
+    config,
+    store,
+    scraper: { scrape: async () => [], enrich: async (articles) => articles },
+    classifier: { classifyAll: async () => [] },
+    curator: { curate: async () => [ARTICLE, other] },
+    contentEngine: createContentEngine({ config, llm, store }),
+    humanizer: { humanize: async (text) => ({ text, report: {} }) },
+    memeGenerator: { nextTreatment: async () => 'text-only', render: async () => null },
+    publisher: { publish: async () => { throw new Error('must not publish'); } },
+    analytics: { refreshMetrics: async () => 0, summarize: async () => null },
+  };
+
+  const result = await createPipeline(agent).run({ count: 1, publish: true });
+
+  assert.deepEqual(result.posts.map((post) => post.status), ['held'], 'held, and the run stops there');
+  assert.equal(labels(llm).filter((label) => label === 'write-post').length, 1, 'no rewrite for a judge that is down');
+  const postable = await store.listPostableArticles({ maxAgeDays: 7 });
+  assert.ok(postable.some((article) => article.id === ARTICLE.id), 'the story can be tried again next run');
 });

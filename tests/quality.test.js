@@ -212,7 +212,7 @@ test('the judge passes a post that clears the floor', async () => {
   assert.equal(result.score, 4);
 });
 
-test('a judge that cannot be reached does not block the run', async () => {
+test('a judge that cannot be reached holds the post instead of passing it', async () => {
   const llm = { chatJson: async () => { throw new Error('rate limited'); } };
 
   const result = await assessDraft({
@@ -222,7 +222,8 @@ test('a judge that cannot be reached does not block the run', async () => {
     settings: { useLlmJudge: true, minScore: 3 },
   });
 
-  assert.equal(result.ok, true, 'an unreachable judge must not stop everything');
+  assert.equal(result.ok, false, 'an unreviewed post never goes out');
+  assert.equal(result.judgeUnavailable, true, 'and the caller can tell it was the judge, not the post');
   assert.match(result.verdict, /unavailable/);
 });
 

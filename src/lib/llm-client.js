@@ -62,6 +62,11 @@ function parseJsonReply(text) {
 /* Providers                                                           */
 /* ------------------------------------------------------------------ */
 
+/** gpt-5*, o1/o3/o4*, but not the chat-latest aliases, which take the old parameters. */
+export function isReasoningModel(model) {
+  return /^(gpt-5|o\d)/.test(String(model ?? '')) && !/chat-latest/.test(String(model));
+}
+
 function createOpenAiProvider(config) {
   const client = new OpenAI({
     apiKey: config.apiKey,
@@ -69,11 +74,18 @@ function createOpenAiProvider(config) {
     maxRetries: 2,
   });
 
-  return async function callOpenAi({ system, user, model, temperature, maxTokens, json }) {
+  return async function callOpenAi({ system, user, model, temperature, maxTokens, json, reasoningEffort }) {
+    // The gpt-5 and o-series models reason before they answer. They refuse
+    // max_tokens and a custom temperature, and their reasoning is billed out
+    // of the same token budget as the reply, so a 900-token cap sized for the
+    // reply alone can come back empty. Give the reasoning its own headroom.
+    const reasoning = isReasoningModel(model);
+
     const response = await client.chat.completions.create({
       model,
-      temperature,
-      max_tokens: maxTokens,
+      ...(reasoning
+        ? { max_completion_tokens: maxTokens + 4000, reasoning_effort: reasoningEffort ?? 'low' }
+        : { temperature, max_tokens: maxTokens }),
       response_format: json ? { type: 'json_object' } : undefined,
       messages: [
         { role: 'system', content: system },
@@ -175,6 +187,7 @@ export function createLlmClient(config) {
       temperature: options.temperature ?? config.temperature ?? 0.8,
       maxTokens: options.maxTokens ?? config.maxTokens ?? 800,
       json: Boolean(options.json),
+      reasoningEffort: options.reasoningEffort,
     });
 
     recordUsage(model, result.inputTokens, result.outputTokens);
